@@ -7,7 +7,7 @@ import org.apache.commons.compress.compressors.brotli.BrotliCompressorInputStrea
 import org.apache.commons.httpclient.ChunkedInputStream
 import org.apache.commons.io.input.BoundedInputStream
 import org.archive.webservices.sparkling.io.IOUtil
-import org.archive.webservices.sparkling.util.StringUtil
+import org.archive.webservices.sparkling.util.{RegexUtil, StringUtil}
 
 import scala.util.Try
 
@@ -23,6 +23,7 @@ class HttpMessage(val statusLine: String, val headers: Seq[(String, String)], va
     headerMap.get("content-type").flatMap(_.split(';').drop(1).headOption).map(_.trim).filter(_.startsWith("charset="))
       .map(_.drop(8).trim.stripPrefix("\"").stripPrefix("'").stripSuffix("'").stripSuffix("\"").split(",", 2).head.trim).filter(_.nonEmpty).map(_.toUpperCase)
   }
+  def lastModified: Option[String] = headerMap.get("last-modified").map(_.trim)
   def redirectLocation: Option[String] = headerMap.get("location").map(_.trim)
   def isChunked: Boolean = headerMap.get("transfer-encoding").map(_.toLowerCase).contains("chunked")
 
