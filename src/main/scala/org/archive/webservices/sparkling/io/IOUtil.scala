@@ -5,9 +5,8 @@ import java.io._
 import com.google.common.io.FileBackedOutputStream
 import org.apache.commons.io.IOUtils
 import org.apache.commons.io.input.BoundedInputStream
-import org.apache.hadoop.io.Text
-import org.apache.hadoop.util.LineReader
 import org.archive.webservices.sparkling._
+import org.archive.webservices.sparkling.compression.Compression
 import org.archive.webservices.sparkling.util._
 
 import scala.util.Try
@@ -87,18 +86,58 @@ object IOUtil {
     )
   }
 
-  def decompress(in: InputStream, filename: Option[String] = None, checkFile: Boolean = false): InputStream = GzipUtil.decompress(in, filename, checkFile)
+  def decompress(in: InputStream, filename: Option[String] = None, checkFile: Boolean = false): InputStream = Compression.decompress(in, filename, checkFile)
 
   def lines(file: String): CleanupIterator[String] = {
-    val in = new FileInputStream(file)
+    val in = new BufferedInputStream(new FileInputStream(file))
     IteratorUtil.cleanup(lines(in, Some(file)), in.close)
   }
 
-  def lines(in: InputStream, filename: Option[String] = None, maxLineLength: Int = 1.mb.toInt, close: Boolean = true): Iterator[String] = {
-    val text = new Text()
-    val decompressed = IOUtil.decompress(in, filename, checkFile = true)
-    val reader = new LineReader(decompressed, Array('\n'.toByte))
-    IteratorUtil.whileDefined { if (Try(reader.readLine(text, maxLineLength, maxLineLength)).getOrElse(0) == 0) None else Some(text.toString) }.map(_.stripSuffix("\r"))
+  def linesByLine(in: InputStream, filename: Option[String] = None, maxLineLength: Int = 1.mb.toInt): Iterator[String] = {
+    val stream = IOUtil.decompress(in, filename, checkFile = true)
+    IteratorUtil.whileDefined(Option(StringUtil.readLine(stream, DefaultCharset, maxLineLength)))
+  }
+
+  private val NewLineByte = '\n'.toByte
+  def lines(in: InputStream, filename: Option[String] = None, maxLineLength: Int = 1.mb.toInt): Iterator[String] = {
+    val stream = IOUtil.decompress(in, filename, checkFile = true)
+    val buffer = Array.ofDim[Byte](64.kb.toInt)
+    var bufferLength = 0
+    var bufferPosn = 0
+    var eof = false
+    IteratorUtil.whileDefined { // see org.apache.hadoop.util.LineReader#readDefaultLine
+      if (eof) None else Some {
+        var lineLength = 0
+        var eol = false
+        val bytes = IteratorUtil.whileDefined {
+          if (!eol && !eof) Some {
+            var startPosn = bufferPosn
+            if (bufferPosn >= bufferLength) {
+              startPosn = 0
+              bufferPosn = 0
+              bufferLength = stream.read(buffer)
+              if (bufferLength < 0) eof = true
+            }
+            if (!eof) {
+              while (bufferPosn < bufferLength && {
+                if (buffer(bufferPosn) == NewLineByte) {
+                  eol = true
+                  bufferPosn += 1
+                  false
+                } else true
+              }) bufferPosn += 1
+              val readLength = bufferPosn - startPosn
+              val appendLength = (readLength - (if (eol) 1 else 0)).min(maxLineLength - lineLength)
+              if (appendLength > 0) {
+                lineLength += appendLength
+                buffer.slice(startPosn, startPosn + appendLength)
+              } else Array.empty[Byte]
+            } else Array.empty[Byte]
+          } else None
+        }.toArray.flatten
+        StringUtil.fromBytes(bytes, charset = DefaultCharset)
+      }
+    }.map(_.stripSuffix("\r"))
   }
 
   def writeLines(file: String, lines: TraversableOnce[String]): Long = {

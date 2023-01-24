@@ -11,15 +11,15 @@ import scala.util.matching.Regex
 // cf. https://github.com/internetarchive/webarchive-commons/blob/master/src/main/java/org/archive/resource/html/ExtractingParseObserver.java
 object LinkExtractor {
   val BaseTag = "base"
-  val LinkTags: Set[String] = Set("a", "form")
-  val ContentEmbedTags: Set[String] = Set("applet", "area", "embed", "frame", "iframe", "img", "input", "object", "source")
+  val LinkTags: Set[String] = Set("a", "form", "area")
+  val ContentEmbedTags: Set[String] = Set("applet", "embed", "frame", "iframe", "img", "input", "object", "source")
   val EmbedTags: Set[String] = ContentEmbedTags ++ Set("link", "script")
-  val ValidJsUrlBeginChars: Set[Int] = "abcdefghijklmnopqrstuvwxyz_01234567889".map(_.toInt).toSet
+  val ValidJsUrlBeginChars: Set[Int] = "abcdefghijklmnopqrstuvwxyz_0123456789".map(_.toInt).toSet
   val CssUrlPattern: Regex = """url\s*\(\s*([\\"']*.+?[\\"']*)\s*\)""".r
   val CssImportUrlPattern: Regex = """@import\s+(('[^']+')|("[^"]+")|(\('[^']+'\))|(\("[^"]+"\))|(\([^)]+\))|([a-z0-9_.:/\\-]+))\s*;""".r
 
   def baseUrl(html: String, url: Option[String] = None): Option[String] = {
-    HtmlProcessor.tag(html, BaseTag).toSeq.headOption.flatMap(HtmlProcessor.attributeValue(_, "href")).flatMap(resolveLink(_, url)).orElse(url)
+    HtmlProcessor.tag(html, BaseTag).buffered.headOption.flatMap(HtmlProcessor.attributeValue(_, "href")).flatMap(resolveLink(_, url)).orElse(url)
   }
 
   def isValidLinkProtocol(url: String): Boolean = {

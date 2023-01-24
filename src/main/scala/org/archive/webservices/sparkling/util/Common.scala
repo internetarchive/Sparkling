@@ -36,9 +36,9 @@ object Common {
     var lastException: Exception = null
     for (retry <- 0 to times) {
       if (retry > 0) Thread.sleep(sleepMillis)
-      val obj: Option[O] = None
+      var obj: Option[O] = None
       try {
-        val obj = Some(init)
+        obj = Some(init)
         return run(obj.get, retry)
       } catch {
         case e: Exception =>

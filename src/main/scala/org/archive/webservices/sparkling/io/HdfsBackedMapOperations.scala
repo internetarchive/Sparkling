@@ -22,7 +22,7 @@ object HdfsBackedMapOperations {
     override def key: String => String = source.key
 
     override def get(key: String): Option[CleanupIterator[String]] = {
-      filter[CleanupIterator[String]](CleanupIterator(source.get(key).toIterator), subtract.map(s => CleanupIterator(s.get(key).toIterator)), _ => key).toSeq.headOption
+      filter[CleanupIterator[String]](CleanupIterator(source.get(key).toIterator), subtract.map(s => CleanupIterator(s.get(key).toIterator)), _ => key).buffered.headOption
     }
 
     override def cache: Boolean = source.cache
@@ -78,7 +78,7 @@ object HdfsBackedMapOperations {
     override def key: String => String = source.key
 
     override def get(key: String): Option[CleanupIterator[String]] = {
-      filter[CleanupIterator[String]](CleanupIterator(source.get(key)), subtract.map(s => CleanupIterator(s.get(key))), _ => key, identity, (_, v) => CleanupIterator(v)).toSeq.headOption
+      filter[CleanupIterator[String]](CleanupIterator(source.get(key)), subtract.map(s => CleanupIterator(s.get(key))), _ => key, identity, (_, v) => CleanupIterator(v)).buffered.headOption
     }
 
     override def cache: Boolean = source.cache

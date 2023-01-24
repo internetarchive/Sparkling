@@ -1,7 +1,9 @@
-package org.archive.webservices.sparkling.io
+package org.archive.webservices.sparkling.compression
 
 import java.io._
 import java.util.zip.GZIPOutputStream
+
+import org.archive.webservices.sparkling.io.IOUtil
 
 class GzipBytes {
   private val bytes: ByteArrayOutputStream = new ByteArrayOutputStream()

@@ -6,7 +6,8 @@ import org.apache.hadoop.fs.Path
 import org.apache.spark.rdd.RDD
 import org.archive.webservices.sparkling.budget.BudgetRddManager
 import org.archive.webservices.sparkling.cdx.CdxRecord
-import org.archive.webservices.sparkling.io.{GzipBytes, HdfsIO, IOUtil}
+import org.archive.webservices.sparkling.compression.GzipBytes
+import org.archive.webservices.sparkling.io.{HdfsIO, IOUtil}
 import org.archive.webservices.sparkling.logging.{Log, LogContext}
 import org.archive.webservices.sparkling.util._
 

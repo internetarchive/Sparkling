@@ -2,7 +2,7 @@ package org.archive.webservices.sparkling.cdx
 
 import org.apache.hadoop.fs.Path
 import org.apache.spark.rdd.RDD
-import org.archive.webservices.sparkling.indexed.{PrefixIndexLoader, SortedPrefixSeq}
+import org.archive.webservices.sparkling.indexed.{HdfsIndexBackedMap, PrefixIndexLoader, SortedPrefixSeq}
 import org.archive.webservices.sparkling.io.{HdfsBackedMap, HdfsIO, IOUtil}
 import org.archive.webservices.sparkling.util._
 
@@ -93,8 +93,7 @@ object CdxServerIndex {
       val buffered = records.map(r => (surt(r), r)).buffered
       buffered.headOption.toIterator.flatMap { case (from, _) =>
         val pointers = cdxIndex.before(from).chain(_.flatMap { case (_, idxLines) =>
-          idxLines.get.map { idxLine =>
-            val split = RegexUtil.split(idxLine, "\t")
+          idxLines.get.map(RegexUtil.split(_, "\t")).filter(_.length > 2).map { split =>
             val (idxSurt, filename, offset) = (StringUtil.prefixBySeparator(split.head, " "), split(1) + ".gz", split(2).toLong)
             (idxSurt, filename, offset)
           }
@@ -152,6 +151,93 @@ object CdxServerIndex {
     }
   }
 
-  def urlToPrefix(url: String, subdomains: Boolean = true, subpaths: Boolean = true, urlInSurtFormat: Boolean = false): Set[String] = SurtUtil
-    .urlToSurtPrefixes(url, subdomains, subpaths, urlInSurtFormat)
+  def primitiveHdfsBackedStrMap(indexDirPath: String): HdfsIndexBackedMap = {
+    new HdfsIndexBackedMap(new Path(indexDirPath, "part-*.gz").toString, StringUtil.prefixBySeparator(_, " "), { case (file, key) =>
+      val indexFile = file.stripSuffix(".gz") + "-idx"
+      HdfsIO.iterLines(indexFile).iter { iter =>
+        val smallerKeyOffsets = iter.map { idxLine =>
+          val split = RegexUtil.split(idxLine, "\t") // surt ts, filename, offset, length
+          (split.head.split(' ').head, split(2).toLong)
+        }.takeWhile(_._1 < key)
+        IteratorUtil.last(smallerKeyOffsets).map(_._2).getOrElse(0L)
+      }
+    })
+  }
+
+  def hdfsBackedStrMap(indexDirPath: String): HdfsBackedMap[String] = {
+    new HdfsBackedMap[String](primitiveHdfsBackedStrMap(indexDirPath), identity)
+  }
+
+  def hdfsBackedMap(indexDirPath: String): HdfsBackedMap[CdxRecord] = {
+    new HdfsBackedMap[CdxRecord](primitiveHdfsBackedStrMap(indexDirPath), str => CdxRecord.fromString(str).get)
+  }
+
+  def loadPartitions(indexDirPath: String, numPartitions: Int, fromWhile: Option[(String, String => Boolean)] = None): RDD[(String, Iterator[CdxRecord])] = {
+    loadStrPartitions(indexDirPath, numPartitions, fromWhile).map { case (surt, str) => (surt, str.flatMap(CdxRecord.fromString)) }
+  }
+
+  def loadStrPartitions(indexDirPath: String, numPartitions: Int, fromWhile: Option[(String, String => Boolean)] = None): RDD[(String, Iterator[String])] = {
+    val files = RddUtil.loadTextFiles(indexDirPath + "/part-*-idx").map { case (file, lines) =>
+      val (beginning, relevant) = if (fromWhile.isDefined) {
+        val (from, whileCond) = fromWhile.get
+        (lines.headOption.map(StringUtil.prefixBySeparator(_, " ")).exists(s => s >= from && whileCond(s)),
+          lines.chain(_.dropWhile(_ < from).takeWhile(l => whileCond(StringUtil.prefixBySeparator(l, " ")))))
+      } else (true, lines)
+      (file, relevant.iter(IteratorUtil.count), beginning)
+    }.collect
+    val totalLines = files.map(_._2).sum + (if (!files.head._3) 1 else 0)
+    val linesPerPartition = (totalLines.toDouble / numPartitions).ceil.toLong
+    val prevFile = files.zipWithIndex.find{case ((_, lines, _), _) => lines > 0}.filter{case ((_, _, beginning), i) => i > 0 && beginning}.map{case (_, i) => files(i - 1)._1}
+    val partitions = files.flatMap { case (file, lines, beginning) =>
+      if (lines > 0) {
+        (0 until ((lines + (if (!beginning) 1 else 0)).toDouble / linesPerPartition).ceil.toInt).map((file, _))
+      } else if (prevFile.contains(file)) {
+        Iterator((file, 0))
+      } else Iterator.empty
+    }
+    val filesBc = sc.broadcast(IteratorUtil.distinctOrdered(partitions.map(_._1).toIterator).toSeq)
+    RddUtil.parallelize(partitions).flatMap { case (file, p) =>
+      val files = filesBc.value
+      val beginning = files.headOption.contains(file) && p == 0
+      val filesIter = files.toIterator.dropWhile(_ < file).buffered
+      val f = filesIter.next
+      val (offset, startSurt, endSurt) = HdfsIO.access(f) { in =>
+        val lines = if (fromWhile.isDefined) {
+          val (from, whileCond) = fromWhile.get
+          val relevant = IteratorUtil.dropButLast(IOUtil.lines(in).buffered)(StringUtil.prefixBySeparator(_, " ") < from)
+          IteratorUtil.drop(relevant, p * linesPerPartition).buffered
+        } else IteratorUtil.drop(IOUtil.lines(in), p * linesPerPartition).buffered
+        val split = lines.head.split('\t')
+        val startSurt = split.head.split(' ').head
+        val offset = split(2).toLong
+        val endSurt = IteratorUtil.drop(lines, linesPerPartition).buffered.headOption.orElse {
+          filesIter.headOption.flatMap(HdfsIO.lines(_, n = 1).headOption)
+        }.map(StringUtil.prefixBySeparator(_, " "))
+        (offset, startSurt, endSurt)
+      }
+      if (!beginning && endSurt.contains(startSurt)) Iterator.empty
+      else {
+        val lines = CleanupIterator.flatten(files.toIterator.dropWhile(_ < file).zipWithIndex.map { case (f, i) =>
+          val in = HdfsIO.open(f.stripSuffix("-idx") + ".gz", offset = if (i == 0) offset else 0)
+          IteratorUtil.cleanup(IOUtil.lines(in), in.close)
+        })
+        val groups = lines.chain { l =>
+          val grouped = IteratorUtil.groupSortedBy(l)(StringUtil.prefixBySeparator(_, " "))
+          if (endSurt.isDefined) {
+            val s = endSurt.get
+            grouped.takeWhile(_._1 <= s)
+          } else grouped
+        }
+        val scoped = if (fromWhile.isDefined) {
+          val (from, whileCond) = fromWhile.get
+          groups.dropWhile(_._1 < from).takeWhile{case (surt, _) => whileCond(surt)}
+        } else groups
+        if (beginning) scoped else scoped.drop(1)
+      }
+    }
+  }
+
+  def urlToPrefix(url: String, subdomains: Boolean = true, subpaths: Boolean = true, urlInSurtFormat: Boolean = false): Set[String] = {
+    SurtUtil.urlToSurtPrefixes(url, subdomains, subpaths, urlInSurtFormat)
+  }
 }

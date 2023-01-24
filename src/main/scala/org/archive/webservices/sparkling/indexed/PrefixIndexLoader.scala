@@ -36,7 +36,7 @@ object PrefixIndexLoader {
       cache: Boolean = true,
       linesPerPartition: Int = -1
   ): RDD[RecordPointer] = {
-    val rdd = (if (linesPerPartition > 0) { RddUtil.loadTextPartitionsByLinesWithFilenames(path, linesPerPartition = linesPerPartition, sorted = sorted) }
+    val rdd = (if (linesPerPartition > 0) { RddUtil.loadTextPartitionsByLinesWithFilenames(path, linesPerPartition = linesPerPartition) }
                else { RddUtil.loadBinary(path, decompress = false, close = false, sorted = sorted) { (indexFile, in) => Iterator((indexFile, IteratorUtil.cleanup(IOUtil.lines(in), in.close))) } })
       .flatMap { case (indexFile, lines) =>
         lines.chain { l =>

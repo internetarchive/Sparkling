@@ -6,6 +6,7 @@ import java.util.zip.{DeflaterInputStream, GZIPInputStream}
 import org.apache.commons.compress.compressors.brotli.BrotliCompressorInputStream
 import org.apache.commons.httpclient.ChunkedInputStream
 import org.apache.commons.io.input.BoundedInputStream
+import org.archive.webservices.sparkling.html.HtmlProcessor
 import org.archive.webservices.sparkling.io.IOUtil
 import org.archive.webservices.sparkling.util.StringUtil
 
@@ -35,7 +36,15 @@ class HttpMessage(val statusLine: String, val headers: Seq[(String, String)], va
     if (maxBodyLength < 0) new BufferedInputStream(decoded) else new BoundedInputStream(new BufferedInputStream(decoded), maxBodyLength)
   }.getOrElse(IOUtil.EmptyStream)
 
-  lazy val bodyString: String = StringUtil.fromInputStream(body, charset.toSeq ++ BodyCharsets)
+  private var _bodyString: Option[String] = None
+  def bodyString: String = _bodyString.getOrElse {
+    _bodyString = Some(StringUtil.fromInputStream(body, charset.toSeq ++ BodyCharsets))
+    _bodyString.get
+  }
+  def htmlBodyString: String = _bodyString.getOrElse {
+    _bodyString = Some(HtmlProcessor.readStream(body, charset.toSeq ++ BodyCharsets))
+    _bodyString.get
+  }
 
   def copy(statusLine: String = statusLine, headers: Seq[(String, String)] = headers, payload: InputStream = payload, maxBodyLength: Long = maxBodyLength): HttpMessage = {
     new HttpMessage(statusLine, headers, payload, maxBodyLength)

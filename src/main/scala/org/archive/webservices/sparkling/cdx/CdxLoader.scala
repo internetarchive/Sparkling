@@ -77,7 +77,7 @@ object CdxLoader {
     }.reduce(_ + _)
   }
 
-  def loadFromWarcGz(path: String, filter: WarcRecord => Boolean = _ => true, digest: InputStream => String = WarcRecord.defaultDigestHash): RDD[CdxRecord] = {
+  def loadFromWarcGz(path: String, filter: WarcRecord => Boolean = _ => true, digest: (WarcRecord, InputStream) => String = (r, s) => r.payloadDigest.getOrElse(WarcRecord.defaultDigestHash(s))): RDD[CdxRecord] = {
     RddUtil.loadBinary(path, decompress = false, close = false) { (file, in) => IteratorUtil.cleanup(CdxUtil.fromWarcGzStream(file, in, filter, digest), in.close) }
   }
 
@@ -86,7 +86,7 @@ object CdxLoader {
       outPath: Option[String],
       filterWarc: WarcRecord => Boolean = _ => true,
       filterCdx: CdxRecord => Boolean = _ => true,
-      digest: InputStream => String = WarcRecord.defaultDigestHash
+      digest: (WarcRecord, InputStream) => String = (r, s) => r.payloadDigest.getOrElse(WarcRecord.defaultDigestHash(s))
   ): Long = {
     if (outPath.isDefined) HdfsIO.ensureOutDir(outPath.get)
     RddUtil.loadBinary(path, decompress = false, close = false) { (file, in) =>

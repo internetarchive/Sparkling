@@ -79,7 +79,7 @@ class HdfsIO private (val fs: FileSystem) {
           sleepMillis,
           _.close,
           (_, retry, e) => {
-            "File access failed (" + retry + "/" + retries + "): " + path + " (Offset: " + offset + ")" + Option(e.getMessage).map(_.trim).filter(_.nonEmpty).map(" - " + _).getOrElse("")
+            "1 File access failed (" + retry + "/" + retries + "): " + path + " (Offset: " + offset + ") - " + e.getClass.getSimpleName + Option(e.getMessage).map(_.trim).filter(_.nonEmpty).map(" - " + _).getOrElse("")
           }
         ) { (in, retry) =>
           if (retry > 0) in.seekToNewSource(offset) else if (offset > 0) in.seek(offset)
@@ -103,7 +103,7 @@ class HdfsIO private (val fs: FileSystem) {
           retries,
           sleepMillis,
           _.close,
-          (_, retry, e) => { "File access failed (" + retry + "/" + retries + "): " + path + Option(e.getMessage).map(_.trim).filter(_.nonEmpty).map(" - " + _).getOrElse("") }
+          (_, retry, e) => { "File access failed (" + retry + "/" + retries + "): " + path + " - " + e.getClass.getSimpleName + Option(e.getMessage).map(_.trim).filter(_.nonEmpty).map(" - " + _).getOrElse("") }
         ) { (in, retry) =>
           if (offset > 0) in.getChannel.position(offset)
           val buffered = if (length > 0) new BufferedInputStream(new BoundedInputStream(in, length)) else new BufferedInputStream(in)
@@ -113,7 +113,10 @@ class HdfsIO private (val fs: FileSystem) {
           } else buffered
         }
     }
-    if (decompress) IOUtil.decompress(in, Some(path)) else in
+    if (decompress) {
+      val decompressed = IOUtil.decompress(in, Some(path))
+      if (decompressed.markSupported()) decompressed else new BufferedInputStream(decompressed)
+    } else in
   }
 
   def access[R](

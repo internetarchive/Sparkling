@@ -23,10 +23,9 @@ object SurtUtil {
 
   def toUrl(surt: String): String = {
     if (RegexUtil.matchesAbsoluteUrlStart(surt)) return surt
-    surt.splitAt(surt.indexOf(')'))
-    val (host, path) = surt.splitAt(surt.indexOf(')'))
-    val hostSplit = host.split(',')
-    "http://" + hostSplit.reverse.mkString(".") + path.drop(1)
+    val hostEnd = surt.indexOf(')')
+    val (host, path) = if (hostEnd >= 0) surt.splitAt(hostEnd) else (surt, "")
+    "http://" + host.split(',').reverse.mkString(".") + path.drop(1)
   }
 
   def urlToSurtPrefixes(url: String, subdomains: Boolean = true, subpaths: Boolean = true, urlInSurtFormat: Boolean = false): Set[String] = {

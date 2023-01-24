@@ -37,17 +37,22 @@ class HdfsBlockStream(fs: FileSystem, file: String, offset: Long = 0, length: Lo
         retries,
         sleepMillis,
         _.close,
-        (_, retry, e) => { "File access failed (" + retry + "/" + retries + "): " + path + " (Offset: " + pos + ")" + Option(e.getMessage).map(_.trim).filter(_.nonEmpty).map(" - " + _).getOrElse("") }
+        (_, retry, e) => { "File access failed (" + retry + "/" + retries + "): " + path + " (Offset: " + pos + ") - " + e.getClass.getSimpleName + Option(e.getMessage).map(_.trim).filter(_.nonEmpty).map(" - " + _).getOrElse("") }
       ) { (in, retry) =>
-        Common.timeout(blockReadTimeoutMillis, Some("Reading " + path + " (Offset: " + pos + ")")) {
+        Common.timeoutWithReporter(blockReadTimeoutMillis) { reporter =>
+          reporter.alive("Reading " + path + " (Offset: " + pos + ")")
           try {
-            if (retry > 0) Try(in.seekToNewSource(pos)) else if (pos > 0) in.seek(pos)
-            var read = 0
-            while (read < blockLength) read += in.read(buffer, read, blockLength - read)
+            if (retry > 0) in.seekToNewSource(pos) else if (pos > 0) in.seek(pos)
+            var readLength = 0
+            while (readLength < blockLength) {
+              reporter.alive()
+              val read = in.read(buffer, readLength, blockLength - readLength)
+              readLength += read
+              pos += read
+            }
           } finally { Try(in.close()) }
         }
       }
-      pos += blockLength
       block = new ByteArrayInputStream(buffer, 0, blockLength)
       System.gc()
     }

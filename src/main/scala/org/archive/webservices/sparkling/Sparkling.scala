@@ -23,6 +23,7 @@ object Sparkling {
   val SparkVersion = "2.4.5"
 
   val GzipExt = ".gz"
+  val ZstdExt = ".zst"
   val WarcExt = ".warc"
   val ArcExt = ".arc"
   val CdxExt = ".cdx"

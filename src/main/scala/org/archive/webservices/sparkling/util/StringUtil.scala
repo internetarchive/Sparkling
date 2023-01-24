@@ -1,6 +1,6 @@
 package org.archive.webservices.sparkling.util
 
-import java.io.{ByteArrayInputStream, InputStream}
+import java.io.{BufferedInputStream, ByteArrayInputStream, InputStream}
 import java.nio.charset.CodingErrorAction
 
 import org.archive.webservices.sparkling.io.IOUtil
@@ -139,12 +139,37 @@ object StringUtil {
   def fromInputStream(in: InputStream, charsets: Seq[String]): String = fromBytes(IOUtil.bytes(in), charsets)
   def fromInputStream(in: InputStream, codec: Codec): String = source(in, codec)(_.mkString)
 
-  def readLine(in: InputStream, charset: String = DefaultCharset, maxLength: Int = 4096 * 1024): String = { // 4 MB
-    val head = in.read()
-    if (head == -1) return null
-    val bytes = (Iterator(head) ++ Iterator.continually(in.read())).takeWhile(_ != -1).map(_.toByte).takeWhile(_.toChar != '\n')
+  private val NewLineByte = '\n'.toByte
+  def readLine(in: InputStream, charset: String = DefaultCharset, maxLength: Int = 4096 * 1024, buffer: Int = 64 * 1024): String = { // maxLength = 4 MB
+    val bytes = if (in.markSupported()) {
+      if (IOUtil.eof(in)) return null
+      val bufferLength = buffer.min(maxLength)
+      val b = Array.ofDim[Byte](bufferLength)
+      Iterator.continually {
+        in.mark(bufferLength)
+        val read = in.read(b)
+        if (read < 0) Iterator(None)
+        else {
+          val newLineIdx = b.indexOf(NewLineByte)
+          if (newLineIdx < 0 || newLineIdx >= read) Iterator(Some {
+            if (read < bufferLength) b.take(read) else b
+          }) else {
+            val tail = b.take(newLineIdx)
+            in.reset()
+            in.skip(newLineIdx + 1)
+            Iterator(Some(tail), None)
+          }
+        }
+      }.flatten.takeWhile(_.isDefined).flatMap(_.get)
+    } else {
+      val head = in.read()
+      if (head == -1) return null
+      (Iterator(head) ++ Iterator.continually(in.read())).takeWhile(_ != -1).map(_.toByte).takeWhile(_ != NewLineByte)
+    }
     val line = (if (maxLength < 0) bytes else bytes.take(maxLength)).toArray
-    fromBytes(line, charset).stripSuffix("\r")
+    val str = fromBytes(line, charset).stripSuffix("\r")
+    IteratorUtil.consume(bytes)
+    str
   }
 
   def formatNumber[A](number: A, decimal: Int = 0)(implicit numeric: Numeric[A]): String = {

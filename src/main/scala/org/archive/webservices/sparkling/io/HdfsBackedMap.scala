@@ -30,12 +30,12 @@ object HdfsBackedMap {
   def apply(path: String, cache: Boolean, preloadLength: Boolean): HdfsBackedMap[String] = apply[String](path, identity, identity, preloadLength)
   def apply(path: String, key: String => String): HdfsBackedMap[String] = apply[String](path, key, identity)
   def apply(path: String, key: String => String, cache: Boolean): HdfsBackedMap[String] = apply[String](path, key, identity, cache)
-  def apply(path: String, key: String => String, cache: Boolean, preloadLength: Boolean): HdfsBackedMap[String] = apply[String](path, key, identity, preloadLength)
+  def apply(path: String, key: String => String, cache: Boolean, preloadLength: Boolean): HdfsBackedMap[String] = apply[String](path, key, identity, cache, preloadLength)
   def apply[V](path: String, key: String => String, value: String => V, cache: Boolean = true, preloadLength: Boolean = true, groupFiles: Int = 1): HdfsBackedMap[V] =
     new HdfsBackedMap[V](new PrimitiveHdfsBackedMapImpl(path, key, cache, preloadLength, groupFiles), value)
 }
 
-class HdfsBackedMap[V] private (primitive: PrimitiveHdfsBackedMap, value: String => V) extends Serializable {
+class HdfsBackedMap[V] (primitive: PrimitiveHdfsBackedMap, value: String => V) extends Serializable {
   def first(key: String): Option[V] = get(key).filter(_.hasNext).map(_.next())
 
   def get(key: String): Option[CleanupIterator[V]] = primitive.get(key).map(_.chain(_.map(value)))

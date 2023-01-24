@@ -83,7 +83,7 @@ class PrimitiveHdfsBackedMapImpl private[io] (val path: String, val key: String 
     if (preloadLength) files.find { case (_, first, last, _) => first <= key && last >= key }
     else IteratorUtil.zipNext(files.toIterator).find { case ((_, first, _, _), next) => first <= key && (next.isEmpty || next.get._2 > key) }.map(_._1)
   }.map(_._1).flatMap { files =>
-    (if (cache) HdfsBackedMap.cached(key, files.head) else None).orElse { iterFiles(files).chainOpt { iter => iter.dropWhile(_._1 < key).toSeq.headOption.filter(_._1 == key).map(_._2) } }
+    (if (cache) HdfsBackedMap.cached(key, files.head) else None).orElse { iterFiles(files).chainOpt { iter => iter.dropWhile(_._1 < key).buffered.headOption.filter(_._1 == key).map(_._2) } }
   }
 
   def iter: CleanupIterator[(String, Iterator[String])] = iterFiles(files.flatMap(_._1))

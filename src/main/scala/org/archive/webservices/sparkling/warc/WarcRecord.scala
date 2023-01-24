@@ -4,14 +4,15 @@ import java.io.InputStream
 
 import org.apache.commons.io.input.BoundedInputStream
 import org.archive.webservices.sparkling.cdx.CdxRecord
+import org.archive.webservices.sparkling.compression.{Compression, DecompressionContext, Gzip, Zstd}
 import org.archive.webservices.sparkling.http.HttpMessage
-import org.archive.webservices.sparkling.io.{GzipUtil, IOUtil}
+import org.archive.webservices.sparkling.io.IOUtil
 import org.archive.webservices.sparkling.logging.LogContext
 import org.archive.webservices.sparkling.util.{DigestUtil, RegexUtil, StringUtil, SurtUtil}
 
 import scala.util.Try
 
-class WarcRecord(val versionStr: String, val headers: Seq[(String, String)], stream: InputStream) {
+class WarcRecord(val versionStr: String, val headers: Seq[(String, String)], val in: InputStream) {
   import WarcRecord._
 
   lazy val headerMap: Map[String, String] = headers.map { case (k, v) => (k.toLowerCase, v) }.toMap
@@ -27,10 +28,10 @@ class WarcRecord(val versionStr: String, val headers: Seq[(String, String)], str
 
   lazy val payload: InputStream = IOUtil.supportMark(contentLength match {
     case Some(length) =>
-      val bounded = new BoundedInputStream(stream, length)
+      val bounded = new BoundedInputStream(in, length)
       bounded.setPropagateClose(false)
       bounded
-    case None => stream
+    case None => in
   })
 
   def close(): Unit = if (contentLength.isDefined) IOUtil.readToEnd(payload)
@@ -64,14 +65,17 @@ object WarcRecord {
 
   def defaultDigestHash(in: InputStream): String = "sha1:" + DigestUtil.sha1Base32(in)
 
-  def get(in: InputStream, handleArc: Boolean = true, autodetectCompressed: Boolean = true, compressed: Boolean = false): Option[WarcRecord] = {
-    next(if ((autodetectCompressed && GzipUtil.isCompressed(in)) || (!autodetectCompressed && compressed)) GzipUtil.decompress(in) else in, handleArc)
+  def get(in: InputStream, handleArc: Boolean = true, compressed: Boolean = true)(implicit context: DecompressionContext = null): Option[WarcRecord] = {
+    next(if (compressed) {
+      if (context == null) Compression.decompress(in)
+      else context.decompress(in)
+    } else in, handleArc)
   }
 
   def next(in: InputStream, handleArc: Boolean = true): Option[WarcRecord] = {
     var line = StringUtil.readLine(in, Charset)
     while (
-      line != null && ! {
+      line != null && !{
         if (line.startsWith(WarcRecordStart)) {
           val versionStr = line
           val headers = collection.mutable.Buffer.empty[(String, String)]
@@ -84,7 +88,7 @@ object WarcRecord {
           return Some(new WarcRecord(versionStr, headers, in))
         }
         false
-      } && handleArc && ! {
+      } && (!handleArc || !{
         if (RegexUtil.matchesAbsoluteUrlStart(line) && !line.startsWith("filedesc:")) {
           val split = line.split(" ")
           // https://archive.org/web/researcher/ArcFileFormat.php
@@ -136,7 +140,7 @@ URL-record-v2 == <url><sp>
           }
         }
         false
-      }
+      })
     ) line = StringUtil.readLine(in, Charset)
     None
   }

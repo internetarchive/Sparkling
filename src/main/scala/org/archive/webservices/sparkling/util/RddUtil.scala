@@ -10,6 +10,7 @@ import org.apache.hadoop.io.{NullWritable, Text}
 import org.apache.spark.rdd.{RDD, ShuffledRDD}
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.{HashPartitioner, Partitioner}
+import org.archive.webservices.sparkling.compression.Gzip
 import org.archive.webservices.sparkling.{Sparkling, _}
 import org.archive.webservices.sparkling.io._
 import org.archive.webservices.sparkling.logging.{Log, LogContext}
@@ -189,9 +190,9 @@ object RddUtil {
     }
   }
 
-  def loadPartitions[A: ClassTag, P: ClassTag: Ordering](path: String, sorted: Boolean = false)(partition: String => Iterator[P])(load: (String, P) => Iterator[A]): RDD[A] = {
-    val partitioned = (if (sorted) loadFilesSorted(path) else loadFilesLocality(path)).flatMap { filename => partition(filename).map((_, filename)).toSet }.persist(StorageLevel.MEMORY_AND_DISK)
-    val partitionIds = partitioned.map { case (p, f) => p }.distinct().zipWithIndex.collectAsMap
+  def loadPartitions[A: ClassTag, P: ClassTag: Ordering](path: String)(partition: String => Iterator[P])(load: (String, P) => Iterator[A]): RDD[A] = {
+    val partitioned = loadFilesLocality(path).flatMap { filename => partition(filename).map((_, filename)).toSet }.persist(StorageLevel.MEMORY_AND_DISK)
+    val partitionIds = partitioned.map { case (p, f) => p }.distinct.collect.sorted.zipWithIndex.toMap
     val partitionIdsBroadcast = sc.broadcast(partitionIds)
     initPartitions(
       partitioned.mapPartitions { records =>
@@ -201,49 +202,72 @@ object RddUtil {
     )
   }
 
-  def loadTextPartitionsByLines(path: String, linesPerPartition: Int = 100000000, sorted: Boolean = false): RDD[String] = {
-    loadTextPartitionsByLinesWithFilenames(path, linesPerPartition, sorted).flatMap(_._2)
+  def loadTextPartitionsByLines(path: String, linesPerPartition: Long = 100000000): RDD[String] = {
+    loadTextPartitionsByLinesWithFilenames(path, linesPerPartition).flatMap(_._2)
   }
 
-  def loadTextPartitionsByLinesWithFilenames(path: String, linesPerPartition: Int = 100000000, sorted: Boolean = false): RDD[(String, CleanupIterator[String])] = {
-    loadPartitions(path, sorted = sorted)(f => (0 until (HdfsIO.countLines(f).toDouble / linesPerPartition).ceil.toInt).toIterator.map((_, f))) { case (f, (p, _)) =>
+  def loadTextPartitionsByLinesWithFilenames(path: String, linesPerPartition: Long = 100000000): RDD[(String, CleanupIterator[String])] = {
+    loadPartitions(path)(f => (0 until (HdfsIO.countLines(f).toDouble / linesPerPartition).ceil.toInt).toIterator.map((f, _))) { case (f, (_, p)) =>
       val in = HdfsIO.open(f)
-      val lines = IteratorUtil.drop(IOUtil.lines(in), p * linesPerPartition).take(linesPerPartition)
+      val lines = IteratorUtil.take(IteratorUtil.drop(IOUtil.lines(in), p * linesPerPartition), linesPerPartition)
       Iterator((f, IteratorUtil.cleanup(lines, in.close)))
     }
   }
 
-  def loadTextPartitionsByGroups(path: String, groupBy: String => String, groupsPerPartition: Int = 100000, sorted: Boolean = false): RDD[(String, Iterator[String])] = {
-    loadPartitions(path, sorted = sorted)(f => (0 until (IteratorUtil.groupSortedBy(HdfsIO.iterLines(path))(groupBy).size.toDouble / groupsPerPartition).ceil.toInt).toIterator.map((_, f))) {
-      case (f, (p, _)) =>
+  def loadTextPartitionsByGroups(path: String, groupBy: String => String, groupsPerPartition: Int = 100000): RDD[(String, Iterator[String])] = {
+    loadPartitions(path)(f => (0 until (IteratorUtil.groupSortedBy(HdfsIO.iterLines(path))(groupBy).size.toDouble / groupsPerPartition).ceil.toInt).toIterator.map((f, _))) {
+      case (f, (_, p)) =>
         val in = HdfsIO.open(f)
         val lines = IteratorUtil.drop(IteratorUtil.groupSortedBy(IOUtil.lines(in))(groupBy), p * groupsPerPartition).take(groupsPerPartition)
         IteratorUtil.cleanup(lines, in.close)
     }
   }
 
-  def loadTextPartitionsByBytes(path: String, bytesPerPartition: Long = 1.gb, sorted: Boolean = false): RDD[String] = {
-    loadPartitionsByBytes(path, bytesPerPartition, sorted = sorted) { (in, p, last) =>
+  def loadTextPartitions(path: String, numPartitions: Int = Sparkling.parallelism, estimateCompressionSampleBytes: Long = 100.mb): RDD[String] = {
+    val bytes = loadFilesLocality(path).map(HdfsIO.length).reduce(_ + _)
+    val bytesPerPartition = (bytes.toDouble / numPartitions).toLong
+    loadTextPartitionsByBytes(path, bytesPerPartition, compressedSize = true, estimateCompressionSampleBytes)
+  }
+
+  def loadTextPartitionsGrouped(path: String, groupBy: String => String, numPartitions: Int = Sparkling.parallelism, estimateCompressionSampleBytes: Long = 100.mb): RDD[(String, Iterator[String])] = {
+    val bytes = loadFilesLocality(path).map(HdfsIO.length).reduce(_ + _)
+    val bytesPerPartition = (bytes.toDouble / numPartitions).toLong
+    loadPartitionsByBytes(path, bytesPerPartition, compressedSize = true, estimateCompressionSampleBytes) { (in, p, last, uncompressedBytesPerPartition) =>
       if (p > 0) StringUtil.readLine(in) // skip first line
-      IteratorUtil.whileDefined { if (last || in.getCount <= bytesPerPartition) Option(StringUtil.readLine(in)) else None }
+      val lines = IteratorUtil.whileDefined { if (last || in.getCount <= uncompressedBytesPerPartition) Option(StringUtil.readLine(in)) else None }
+      val groups = IteratorUtil.groupSortedBy(lines)(groupBy)
+      if (p > 0 && groups.hasNext) groups.next // skip first group
+      groups
     }
   }
 
-  def loadPartitionsByBytes[A: ClassTag](path: String, bytesPerPartition: Long = 1.gb, sorted: Boolean = false)(load: (CountingInputStream, Int, Boolean) => Iterator[A]): RDD[A] = {
-    loadPartitions(path, sorted = sorted) { f =>
+  def loadTextPartitionsByBytes(path: String, bytesPerPartition: Long = 1.gb, compressedSize: Boolean = false, estimateCompressionSampleBytes: Long = 100.mb): RDD[String] = {
+    loadPartitionsByBytes(path, bytesPerPartition, compressedSize, estimateCompressionSampleBytes) { (in, p, last, uncompressedBytesPerPartition) =>
+      if (p > 0) StringUtil.readLine(in) // skip first line
+      IteratorUtil.whileDefined { if (last || in.getCount <= uncompressedBytesPerPartition) Option(StringUtil.readLine(in)) else None }
+    }
+  }
+
+  def loadPartitionsByBytes[A: ClassTag](path: String, bytesPerPartition: Long = 1.gb, compressedSize: Boolean = false, estimateCompressionSampleBytes: Long = 100.mb)(load: (CountingInputStream, Int, Boolean, Long) => Iterator[A]): RDD[A] = {
+    loadPartitions(path) { f =>
       val fileSize = HdfsIO.length(f)
       val uncompressedSize =
-        if (f.toLowerCase.endsWith(GzipExt)) {
-          val factor = HdfsIO.access(f, decompress = false)(GzipUtil.estimateCompressionFactor(_, bytesPerPartition))
+        if (f.toLowerCase.endsWith(GzipExt) && !compressedSize) {
+          val factor = HdfsIO.access(f, decompress = false)(Gzip.estimateCompressionFactor(_, estimateCompressionSampleBytes))
           (fileSize * factor).ceil.toLong
         } else fileSize
       val numPartitions = (uncompressedSize.toDouble / bytesPerPartition).ceil.toInt
-      (0 until numPartitions).toIterator.map(p => ((p, p == numPartitions - 1), f))
-    } { case (f, ((p, last), _)) =>
+      (0 until numPartitions).toIterator.map(p => (f, (p, p == numPartitions - 1)))
+    } { case (f, (_, (p, last))) =>
+      val uncompressedBytesPerPartition =
+        if (f.toLowerCase.endsWith(GzipExt) && compressedSize) {
+          val factor = HdfsIO.access(f, decompress = false)(Gzip.estimateCompressionFactor(_, estimateCompressionSampleBytes))
+          (bytesPerPartition * factor).ceil.toLong
+        } else bytesPerPartition
       val in = HdfsIO.open(f)
-      IOUtil.skip(in, p * bytesPerPartition)
+      IOUtil.skip(in, p * uncompressedBytesPerPartition)
       val counting = new CountingInputStream(in)
-      IteratorUtil.cleanup(load(counting, p, last), counting.close)
+      IteratorUtil.cleanup(load(counting, p, last, uncompressedBytesPerPartition), counting.close)
     }
   }
 
@@ -335,6 +359,20 @@ object RddUtil {
       groupFiles: Int = 1
   ): RDD[(String, Seq[ManagedVal[Iterator[V]]])] = {
     val joinMaps = joinPaths.map(HdfsBackedMap(_, groupBy, parse, cache = false, preloadLength = false, groupFiles = groupFiles))
+    cogroup(sortedRdd, joinMaps, fromWhile)
+  }
+
+  def cogroupMap[V: ClassTag](
+    sortedRdd: RDD[(String, Iterator[V])],
+    joinMap: HdfsBackedMap[V],
+    fromWhile: Option[(String, String => Boolean)] = None
+  ): RDD[(String, Seq[ManagedVal[Iterator[V]]])] = cogroup(sortedRdd.map{case (k,v) => (k, ManagedVal(v))}, Seq(joinMap), fromWhile)
+
+  def cogroup[V: ClassTag](
+    sortedRdd: RDD[(String, ManagedVal[Iterator[V]])],
+    joinMaps: Seq[HdfsBackedMap[V]],
+    fromWhile: Option[(String, String => Boolean)] = None
+  ): RDD[(String, Seq[ManagedVal[Iterator[V]]])] = {
     val joinMapsBroadcast = sc.broadcast(joinMaps)
 
     val ends = sortedRdd.mapPartitions { records => Iterator(if (records.hasNext) Some(records.next._1) else None) }.collect

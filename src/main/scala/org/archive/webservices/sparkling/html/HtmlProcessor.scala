@@ -1,8 +1,13 @@
 package org.archive.webservices.sparkling.html
 
+import java.io.InputStream
+import java.nio.charset.CodingErrorAction
+
+import org.archive.webservices.sparkling.Sparkling
 import org.archive.webservices.sparkling.Sparkling.prop
 import org.archive.webservices.sparkling.util.{IteratorUtil, RegexUtil, StringUtil}
 
+import scala.util.Try
 import scala.util.matching.Regex
 
 object HtmlProcessor {
@@ -52,6 +57,30 @@ object HtmlProcessor {
       val bodyText = TagOpenClosePattern.replaceAllIn(removeScripts(body), "")
       removeComments(bodyText)
     }
+  }
+
+  def readStream(in: InputStream, charsets: Seq[String] = Seq(Sparkling.DefaultCharset), maxLineLength: Int = 4096 * 1024): String = {
+    val pattern = "(encoding|charset)=[\\\" ]*([^\\\" ]+)".r
+    var c = charsets
+    var cSet = c.toSet
+    IteratorUtil.whileDefined {
+      val head = in.read()
+      if (head == -1) None else Some {
+        val bytes = (Iterator(head) ++ Iterator.continually(in.read())).takeWhile(_ != -1).map(_.toByte).takeWhile(_.toChar != '\n')
+        val line = (if (maxLineLength < 0) bytes else bytes.take(maxLineLength)).toArray
+        val str = {
+          c.toIterator.flatMap { charset => Try(StringUtil.fromBytes(line, StringUtil.codec(charset, CodingErrorAction.REPORT))).toOption } ++ IteratorUtil.getLazy { _ =>
+            StringUtil.fromBytes(line, StringUtil.codec(c.headOption.getOrElse(Sparkling.DefaultCharset), CodingErrorAction.IGNORE))
+          }
+        }.next
+        val newC = IteratorUtil.distinct(pattern.findAllMatchIn(str).map(_.group(2)).filter(!cSet.contains(_))).toSeq
+        if (newC.nonEmpty) {
+          c = newC ++ c
+          cSet = c.toSet
+        }
+        str
+      }
+    }.mkString("\n")
   }
 
   def iterateTags(html: String): Iterator[TagMatch] = {

@@ -1,7 +1,7 @@
 import sbt.ExclusionRule
 import sbt.Keys._
 
-lazy val commonSettings = Seq(name := "sparkling", organization := "org.archive.webservices", version := "0.2.0-SNAPSHOT", scalaVersion := "2.12.8", fork := true)
+lazy val commonSettings = Seq(name := "sparkling", organization := "org.archive.webservices", version := "0.3.7-SNAPSHOT", scalaVersion := "2.12.8", fork := true)
 
 val circeVersion = "0.13.0"
 

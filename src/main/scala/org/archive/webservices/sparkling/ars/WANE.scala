@@ -84,12 +84,16 @@ object WANE {
     }
   }
 
+  def cleanup(mention: String): Option[String] = Some(mention).filter(_ != null).map(_.trim).filter { m =>
+    m.nonEmpty && !m.exists(_ < ' ')
+  }
+
   def entities(text: String, pipeline: StanfordCoreNLP = pipeline): Map[String, Set[String]] =
     try {
       val doc = new CoreDocument(text)
       pipeline.annotate(doc)
       if (doc.entityMentions != null) {
-        doc.entityMentions.asScala.filter(m => m != null && m.text.trim.nonEmpty).map(m => (m.entityType, m.text.trim)).groupBy(_._1).map { case (entityType, group) =>
+        doc.entityMentions.asScala.flatMap(m => cleanup(m.text).map((m.entityType, _))).groupBy(_._1).map { case (entityType, group) =>
           entityType -> group.map(_._2).toSet
         }
       } else Map.empty
