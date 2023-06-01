@@ -1,9 +1,9 @@
 package org.archive.webservices.sparkling.compression
 
 import java.io.{InputStream, OutputStream}
-
 import com.google.common.io.CountingInputStream
 import org.apache.commons.compress.compressors.gzip.{GzipCompressorInputStream, GzipCompressorOutputStream}
+import org.apache.commons.io.output.CountingOutputStream
 import org.archive.webservices.sparkling.io.{IOUtil, NonClosingInputStream, NonClosingOutputStream}
 import org.archive.webservices.sparkling.util.IteratorUtil
 
@@ -40,7 +40,7 @@ object Gzip extends Decompressor {
         } else None
       } else Try {
         val pos = stream.getCount
-        current = Some(new GzipCompressorInputStream(new NonClosingInputStream(stream), false))
+        current = Some(IOUtil.supportMark(new GzipCompressorInputStream(new NonClosingInputStream(stream), false)))
         current.map((pos, _))
       }.getOrElse(None)
     }
@@ -69,5 +69,13 @@ object Gzip extends Decompressor {
     val compressed = new GzipCompressorOutputStream(new NonClosingOutputStream(out))
     gzip(compressed)
     compressed.close()
+  }
+
+  def countCompressOut(out: OutputStream)(gzip: GzipCompressorOutputStream => Unit): Long = {
+    val counting = new CountingOutputStream(new NonClosingOutputStream(out))
+    val compressed = new GzipCompressorOutputStream(counting)
+    gzip(compressed)
+    compressed.close()
+    counting.getByteCount
   }
 }

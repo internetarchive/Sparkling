@@ -27,7 +27,10 @@ object CdxRecord {
         conpressedSizeStr.toLong,
         split.drop(9)
       ))
-    } catch { case e: Exception => None }
+    } catch { case e: Exception =>
+      e.printStackTrace()
+      None
+    }
   }
 }
 
@@ -48,7 +51,8 @@ case class CdxRecord(
   def toCdxString(additionalFields: Seq[String]): String = {
     val statusStr = if (status < 0) "-" else status.toString
     val additionalStr = if (additionalFields.nonEmpty) additionalFields.mkString(" ") else ""
-    s"$surtUrl $timestamp $originalUrl $mime $statusStr $digest $redirectUrl $meta $compressedSize $additionalStr".trim
+    val escapeRedirectUrl = redirectUrl.replace(" ", "%20")
+    s"$surtUrl $timestamp $originalUrl $mime $statusStr $digest $escapeRedirectUrl $meta $compressedSize $additionalStr".trim
   }
 
   def toCdxString(includeAdditionalFields: Boolean = true): String = toCdxString(if (includeAdditionalFields) additionalFields else Seq.empty)

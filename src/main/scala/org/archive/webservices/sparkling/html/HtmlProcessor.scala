@@ -84,14 +84,13 @@ object HtmlProcessor {
   }
 
   def iterateTags(html: String): Iterator[TagMatch] = {
-    val strict = if (!strictMode) Some(html) else strictHtml(html)
-    if (strict.isDefined) {
+    (if (!strictMode) Some(html) else strictHtml(html)).map { strict =>
       var pos = 0
       var stack = List.empty[String]
       var inCode: Option[String] = None
       val tags = collection.mutable.Map.empty[String, Int]
       var maxHtmlStackDepthReached = false
-      for (tag <- TagOpenClosePattern.findAllMatchIn(strict.get).takeWhile(_ => !maxHtmlStackDepthReached)) yield {
+      for (tag <- TagOpenClosePattern.findAllMatchIn(strict).takeWhile(_ => !maxHtmlStackDepthReached)) yield {
         if (maxHtmlStackDepthReached) None
         else {
           val slash = tag.group(1).trim
@@ -123,13 +122,13 @@ object HtmlProcessor {
                 stack = stack.drop(1)
               }
             }
-            val text = html.substring(pos, tag.start)
+            val text = strict.substring(pos, tag.start)
             pos = tag.end
             Some(TagMatch(tag.matched, name, opening, closing, attributes, removeComments(text), stack))
           } else None
         }
       }
-    } else Iterator.empty
+    }.getOrElse(Iterator.empty)
   }.flatten
 
   private def internalProcessTags(

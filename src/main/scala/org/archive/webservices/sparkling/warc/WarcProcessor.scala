@@ -1,13 +1,15 @@
 package org.archive.webservices.sparkling.warc
 
-import java.io._
+import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream
+import org.apache.commons.io.output.CountingOutputStream
 
+import java.io._
 import org.apache.hadoop.fs.Path
 import org.apache.spark.rdd.RDD
 import org.archive.webservices.sparkling.budget.BudgetRddManager
 import org.archive.webservices.sparkling.cdx.CdxRecord
-import org.archive.webservices.sparkling.compression.GzipBytes
-import org.archive.webservices.sparkling.io.{HdfsIO, IOUtil}
+import org.archive.webservices.sparkling.compression.{Compression, Gzip, GzipBytes, Zstd}
+import org.archive.webservices.sparkling.io.{CleanupInputStream, HdfsIO, IOUtil, NonClosingOutputStream}
 import org.archive.webservices.sparkling.logging.{Log, LogContext}
 import org.archive.webservices.sparkling.util._
 
@@ -36,7 +38,7 @@ object WarcProcessor {
 
     val warcs = cdx.filter { record =>
       val location = record.locationFromAdditionalFields._1
-      StringUtil.stripSuffix(location.toLowerCase, GzipExt).endsWith(WarcExt)
+      StringUtil.stripSuffixes(location.toLowerCase, GzipExt, ZstdExt).endsWith(WarcExt)
     }
     val warcsRepartitioned = BudgetRddManager.repartitionByBudget(warcs, maxFileSize - bytesReservedForHeader, repartitionBufferSize)(_.compressedSize)
     val warcCount = extractWarcsByCdx(warcsRepartitioned, warcHeader, destPath, generateCdx, gzipped, checkPath = false)(request)
@@ -129,9 +131,21 @@ object WarcProcessor {
                 if (generateCdx) arcCdxOut.get.println(record.toCdxString(Seq(arcPosition.toString, arcFile)))
                 arcPosition += length
               } else {
-                request(location, offset, length)(IOUtil.copy(_, warcOut.get))
-                if (generateCdx) warcCdxOut.get.println(record.toCdxString(Seq(warcPosition.toString, warcFile)))
-                warcPosition += length
+                if (location.toLowerCase.endsWith(ZstdExt)) {
+                  Zstd.ifInit(location, close = true) {
+                    val r = request(location, 0, -1)
+                    new CleanupInputStream(r.get, () => r.clear(false))
+                  }
+                  val compressedSize = Gzip.countCompressOut(warcOut.get) { compressOut =>
+                    request(location, offset, length)(in => IOUtil.copy(Zstd.decompress(in), compressOut))
+                  }
+                  if (generateCdx) warcCdxOut.get.println(record.copy(compressedSize = compressedSize).toCdxString(Seq(warcPosition.toString, warcFile)))
+                  warcPosition += compressedSize
+                } else {
+                  request(location, offset, length)(IOUtil.copy(_, warcOut.get))
+                  if (generateCdx) warcCdxOut.get.println(record.toCdxString(Seq(warcPosition.toString, warcFile)))
+                  warcPosition += length
+                }
               }
               Log.debug("Copying " + location + ":" + offset + ":" + length + " - done.")
               1L

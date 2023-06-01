@@ -1,9 +1,6 @@
 package org.archive.webservices.sparkling.io
 
-import java.io.{BufferedInputStream, ByteArrayInputStream, InputStream, SequenceInputStream}
-import java.util.Collections
-
-import scala.collection.JavaConverters._
+import java.io.{BufferedInputStream, ByteArrayInputStream, InputStream}
 
 class ByteArray {
   private val arrays = collection.mutable.Buffer.empty[Array[Byte]]
@@ -11,7 +8,7 @@ class ByteArray {
   def append(array: Array[Byte]): Unit = if (array.nonEmpty) arrays += array
   def append(array: ByteArray): Unit = if (array.nonEmpty) arrays ++= array.arrays
 
-  def toInputStream: InputStream = new BufferedInputStream(new SequenceInputStream(Collections.enumeration(arrays.map(new ByteArrayInputStream(_)).asJava)))
+  def toInputStream: InputStream = new BufferedInputStream(new ChainedInputStream(arrays.toIterator.map(new ByteArrayInputStream(_))))
 
   def length: Long = arrays.map(_.length.toLong).sum
 

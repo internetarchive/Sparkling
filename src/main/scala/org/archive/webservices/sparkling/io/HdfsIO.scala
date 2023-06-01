@@ -66,7 +66,8 @@ class HdfsIO private (val fs: FileSystem) {
         val fileSize = this.length(path)
         val copyLocalThreshold = fileSize.toDouble * HdfsIO.dynamicCopyLocalThreshold
         if (localFiles.contains(path)) HdfsIO.LoadingStrategy.CopyLocal
-        else if (offset < copyLocalThreshold && (length < 0 || length > copyLocalThreshold)) HdfsIO.LoadingStrategy.CopyLocal
+        else if (length > copyLocalThreshold) HdfsIO.LoadingStrategy.CopyLocal
+        else if (length < 0 && fileSize > fs.getFileStatus(new Path(path)).getBlockSize) HdfsIO.LoadingStrategy.CopyLocal
         else HdfsIO.LoadingStrategy.BlockWise
       } else strategy
     Log.info(
@@ -150,7 +151,7 @@ class HdfsIO private (val fs: FileSystem) {
 
   def length(path: String): Long = fs.getFileStatus(new Path(path)).getLen
 
-  def lines(path: String, n: Int = -1, offset: Long = 0): Seq[String] = access(path, offset, length = if (n < 0) -1 else 0) { in =>
+  def lines(path: String, n: Int = -1, offset: Long = 0): Seq[String] = access(path, offset) { in =>
     val lines = IOUtil.lines(in)
     if (n < 0) lines.toList else lines.take(n).toList
   }

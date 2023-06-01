@@ -172,11 +172,11 @@ object CdxServerIndex {
     new HdfsBackedMap[CdxRecord](primitiveHdfsBackedStrMap(indexDirPath), str => CdxRecord.fromString(str).get)
   }
 
-  def loadPartitions(indexDirPath: String, numPartitions: Int, fromWhile: Option[(String, String => Boolean)] = None): RDD[(String, Iterator[CdxRecord])] = {
-    loadStrPartitions(indexDirPath, numPartitions, fromWhile).map { case (surt, str) => (surt, str.flatMap(CdxRecord.fromString)) }
+  def loadPartitions(indexDirPath: String, numPartitions: Int, fromWhile: Option[(String, String => Boolean)] = None, surtPrefix: String => String = identity): RDD[(String, Iterator[CdxRecord])] = {
+    loadStrPartitions(indexDirPath, numPartitions, fromWhile, surtPrefix).map { case (p, str) => (p, str.flatMap(CdxRecord.fromString)) }
   }
 
-  def loadStrPartitions(indexDirPath: String, numPartitions: Int, fromWhile: Option[(String, String => Boolean)] = None): RDD[(String, Iterator[String])] = {
+  def loadStrPartitions(indexDirPath: String, numPartitions: Int, fromWhile: Option[(String, String => Boolean)] = None, surtPrefix: String => String = identity): RDD[(String, Iterator[String])] = {
     val files = RddUtil.loadTextFiles(indexDirPath + "/part-*-idx").map { case (file, lines) =>
       val (beginning, relevant) = if (fromWhile.isDefined) {
         val (from, whileCond) = fromWhile.get
@@ -201,21 +201,21 @@ object CdxServerIndex {
       val beginning = files.headOption.contains(file) && p == 0
       val filesIter = files.toIterator.dropWhile(_ < file).buffered
       val f = filesIter.next
-      val (offset, startSurt, endSurt) = HdfsIO.access(f) { in =>
+      val (offset, startPrefix, endPrefix) = HdfsIO.access(f) { in =>
         val lines = if (fromWhile.isDefined) {
-          val (from, whileCond) = fromWhile.get
+          val (from, _) = fromWhile.get
           val relevant = IteratorUtil.dropButLast(IOUtil.lines(in).buffered)(StringUtil.prefixBySeparator(_, " ") < from)
           IteratorUtil.drop(relevant, p * linesPerPartition).buffered
         } else IteratorUtil.drop(IOUtil.lines(in), p * linesPerPartition).buffered
         val split = lines.head.split('\t')
-        val startSurt = split.head.split(' ').head
+        val startPrefix = surtPrefix(split.head.split(' ').head)
         val offset = split(2).toLong
-        val endSurt = IteratorUtil.drop(lines, linesPerPartition).buffered.headOption.orElse {
+        val endPrefix = IteratorUtil.drop(lines, linesPerPartition).buffered.headOption.orElse {
           filesIter.headOption.flatMap(HdfsIO.lines(_, n = 1).headOption)
-        }.map(StringUtil.prefixBySeparator(_, " "))
-        (offset, startSurt, endSurt)
+        }.map(StringUtil.prefixBySeparator(_, " ")).map(surtPrefix)
+        (offset, startPrefix, endPrefix)
       }
-      if (!beginning && endSurt.contains(startSurt)) Iterator.empty
+      if (!beginning && endPrefix.contains(startPrefix)) Iterator.empty
       else {
         val lines = CleanupIterator.flatten(files.toIterator.dropWhile(_ < file).zipWithIndex.map { case (f, i) =>
           val in = HdfsIO.open(f.stripSuffix("-idx") + ".gz", offset = if (i == 0) offset else 0)
@@ -223,8 +223,8 @@ object CdxServerIndex {
         })
         val groups = lines.chain { l =>
           val grouped = IteratorUtil.groupSortedBy(l)(StringUtil.prefixBySeparator(_, " "))
-          if (endSurt.isDefined) {
-            val s = endSurt.get
+          if (endPrefix.isDefined) {
+            val s = endPrefix.get
             grouped.takeWhile(_._1 <= s)
           } else grouped
         }
