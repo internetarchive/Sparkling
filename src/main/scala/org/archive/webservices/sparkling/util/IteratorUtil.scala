@@ -140,6 +140,8 @@ object IteratorUtil {
 
   def dropButLast[A](iter: BufferedIterator[A])(condition: A => Boolean): Iterator[A] = last(takeWhile(iter)(condition)).toIterator ++ iter
 
+  def dropLastIf[A](iter: Iterator[A])(condition: A => Boolean): Iterator[A] = iter.filter(a => iter.hasNext || !condition(a))
+
   def getLazy[A](items: (Int => A)*): Iterator[A] = (0 until items.size).toIterator.map(i => items(i)(i))
 
   def catLazy[A](items: (Int => TraversableOnce[A])*): Iterator[A] = getLazy(items: _*).flatten

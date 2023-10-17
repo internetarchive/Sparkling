@@ -32,11 +32,14 @@ abstract class SparklesJob[I, O: ClassTag] extends Serializable {
       override def printLabel: Option[String] = label
       def input: I = parent.input
       def process(iter: Int, in: I, print: Boolean): A = action(parent.run(iter, in, print), iter)
+      lastOut = SparklesJob.processIter.map(action(jobParent.get, _))
     }
   }
 }
 
 object SparklesJob {
+  var processIter: Option[Int] = None
+
   def init[I: ClassTag](inputLabel: Option[String], in: => I): SparklesJob[I, I] = new SparklesJob[I, I] {
     override def printLabel: Option[String] = inputLabel
     lazy val input: I = in

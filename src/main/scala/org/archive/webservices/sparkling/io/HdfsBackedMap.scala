@@ -27,7 +27,7 @@ object HdfsBackedMap {
 
   def apply(path: String): HdfsBackedMap[String] = apply[String](path, identity, identity)
   def apply(path: String, cache: Boolean): HdfsBackedMap[String] = apply[String](path, identity, identity, cache)
-  def apply(path: String, cache: Boolean, preloadLength: Boolean): HdfsBackedMap[String] = apply[String](path, identity, identity, preloadLength)
+  def apply(path: String, cache: Boolean, preloadLength: Boolean): HdfsBackedMap[String] = apply[String](path, identity, identity, cache = cache, preloadLength)
   def apply(path: String, key: String => String): HdfsBackedMap[String] = apply[String](path, key, identity)
   def apply(path: String, key: String => String, cache: Boolean): HdfsBackedMap[String] = apply[String](path, key, identity, cache)
   def apply(path: String, key: String => String, cache: Boolean, preloadLength: Boolean): HdfsBackedMap[String] = apply[String](path, key, identity, cache, preloadLength)
@@ -36,6 +36,10 @@ object HdfsBackedMap {
 }
 
 class HdfsBackedMap[V] (primitive: PrimitiveHdfsBackedMap, value: String => V) extends Serializable {
+  def setFileIndex(fileIndex: HdfsBackedMap[(String, Long)]): Unit = {
+    primitive.fileIndex = Some(fileIndex)
+  }
+
   def first(key: String): Option[V] = get(key).filter(_.hasNext).map(_.next())
 
   def get(key: String): Option[CleanupIterator[V]] = primitive.get(key).map(_.chain(_.map(value)))

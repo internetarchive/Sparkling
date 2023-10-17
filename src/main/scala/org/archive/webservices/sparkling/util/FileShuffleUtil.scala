@@ -127,10 +127,10 @@ object FileShuffleUtil {
   def sortWithinPartitions[A: ClassTag: TypedInOut, S: ClassTag: Ordering](rdd: RDD[A])(length: A => Long, sortBy: A => S): RDD[A] = {
     val ordering = implicitly[Ordering[S]]
     val inout = implicitly[TypedInOut[A]]
-    lazyMapPartitions(rdd) { (idx, records) =>
+    lazyMapPartitions(rdd) { (_, records) =>
       var writtenChunks = 0L
       var writtenLines = 0L
-      var chunks = Common.timeoutWithReporter(taskTimeoutMillis) { reporter =>
+      val chunks = Common.timeoutWithReporter(taskTimeoutMillis) { reporter =>
         IteratorUtil.grouped(records, maxSortBytes)(length).map { chunk =>
           val sorted = chunk.toSeq.sortBy(sortBy)
           val file = IOUtil.tmpFile

@@ -46,7 +46,7 @@ object CdxLoader {
   ): Long = {
     HdfsIO.ensureOutDir(path)
     val filePrefix = StringUtil.stripSuffixes(new Path(path).getName, GzipExt, CdxExt)
-    rdd.mapPartitionsWithIndex { case (idx, records) =>
+    rdd.mapPartitions { records =>
       val batches = if (maxBatchSize < 0) Iterator(records) else IteratorUtil.grouped(records, maxBatchSize)(_._1.toCdxString.length)
       batches.zipWithIndex.map { case (batch, batchIdx) =>
         val batchSuffix = if (maxBatchSize < 0) "" else "-" + StringUtil.padNum(batchIdx, 5)

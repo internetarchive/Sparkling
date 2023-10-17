@@ -5,6 +5,8 @@ import org.archive.webservices.sparkling.io.HdfsBackedMapOperations.{HdfsBackedS
 import org.archive.webservices.sparkling.util.{CleanupIterator, IteratorUtil, RddUtil}
 
 trait PrimitiveHdfsBackedMap extends Serializable {
+  var fileIndex: Option[HdfsBackedMap[(String, Long)]] = None
+
   def key: String => String
   def get(key: String): Option[CleanupIterator[String]]
   def cache: Boolean
@@ -59,31 +61,39 @@ class PrimitiveHdfsBackedMapImpl private[io] (val path: String, val key: String 
     }.collect.sortBy { case (files, first, last, lines) => (first, files.head) }
   }
 
-  private def iterFiles(files: Seq[String]): CleanupIterator[(String, Iterator[String])] = {
-    var prevCache: Option[CleanupIterator[String]] = None
+  private def iterFiles(files: Seq[String], offset: Long = 0): CleanupIterator[(String, Iterator[String])] = {
+    var prev: Option[CleanupIterator[String]] = None
+    var first = true
     CleanupIterator.flatten(files.toIterator.map { file =>
-      val in = HdfsIO.open(file)
+      val in = HdfsIO.open(file, offset = if (first) offset else 0)
+      first = false
       IteratorUtil.cleanup(IOUtil.lines(in).filter(_.trim.nonEmpty).map(l => (file, key(l), l)), in.close)
-    }).onClear { () => for (c <- prevCache) c.clear(false) }.chain { lines =>
+    }).onClear { () => for (p <- prev) p.clear(false) }.chain { lines =>
       val grouped = IteratorUtil.groupSortedBy(lines)(_._2)
       if (cache) {
         grouped.map { case (k, v) =>
-          for (c <- prevCache) c.clear(false)
+          for (p <- prev) p.clear(false)
           val buffered = v.buffered
           val file = buffered.head._1
           val values = IOUtil.buffer(bufferSize = CacheBufferSize, lazyEval = false) { out => IOUtil.writeLines(out, buffered.map(_._3)) }
-          prevCache = Some(HdfsBackedMap.cache(k, file, values))
-          (k, prevCache.get)
+          prev = Some(HdfsBackedMap.cache(k, file, values))
+          (k, prev.get)
         }
       } else { grouped.map { case (k, v) => (k, v.map(_._3)) } }
     }
+  }
+
+  private def iterFiles(files: Seq[String], fromKey: String): CleanupIterator[(String, Iterator[String])] = {
+    val indexFile = fileIndex.flatMap(_.before(fromKey).chain(_.flatMap(_._2.option.toIterator.flatten).buffered.headOption.toIterator).headOption)
+    val filtered = indexFile.map(_._1.split('/').last).map(f => files.dropWhile(_.split('/').last < f)).getOrElse(files)
+    iterFiles(filtered, indexFile.filter{case (f, _) => filtered.headOption.map(_.split('/').last).contains(f.split('/').last)}.map(_._2).getOrElse(0L))
   }
 
   def get(key: String): Option[CleanupIterator[String]] = {
     if (preloadLength) files.find { case (_, first, last, _) => first <= key && last >= key }
     else IteratorUtil.zipNext(files.toIterator).find { case ((_, first, _, _), next) => first <= key && (next.isEmpty || next.get._2 > key) }.map(_._1)
   }.map(_._1).flatMap { files =>
-    (if (cache) HdfsBackedMap.cached(key, files.head) else None).orElse { iterFiles(files).chainOpt { iter => iter.dropWhile(_._1 < key).buffered.headOption.filter(_._1 == key).map(_._2) } }
+    (if (cache) HdfsBackedMap.cached(key, files.head) else None).orElse { iterFiles(files, key).chainOpt { iter => iter.dropWhile(_._1 < key).buffered.headOption.filter(_._1 == key).map(_._2) } }
   }
 
   def iter: CleanupIterator[(String, Iterator[String])] = iterFiles(files.flatMap(_._1))
@@ -92,12 +102,12 @@ class PrimitiveHdfsBackedMapImpl private[io] (val path: String, val key: String 
     val relevantFiles =
       if (preloadLength) files.dropWhile { case (_, _, last, _) => last < key && (!lookupPrefixes || !key.startsWith(last)) }
       else IteratorUtil.dropButLast(files.toIterator.buffered) { case (_, first, _, _) => first < key && (!lookupPrefixes || !key.startsWith(first)) }.toSeq
-    iterFiles(relevantFiles.flatMap(_._1)).chain { iter => iter.dropWhile { case (k, _) => k < key && (!lookupPrefixes || !key.startsWith(k)) } }
+    iterFiles(relevantFiles.flatMap(_._1), key).chain { iter => iter.dropWhile { case (k, _) => k < key && (!lookupPrefixes || !key.startsWith(k)) } }
   }
 
   def before(key: String): CleanupIterator[(String, Iterator[String])] = {
     val relevantFiles = IteratorUtil.dropButLast(files.toIterator.buffered) { case (_, first, _, _) => first < key }.toSeq
-    iterFiles(relevantFiles.flatMap(_._1)).chain { iter => IteratorUtil.dropButLast(iter.chain(_.map { case (k, v) => (k, v.toArray.toIterator) })) { case (k, _) => k < key } }
+    iterFiles(relevantFiles.flatMap(_._1), key).chain { iter => IteratorUtil.dropButLast(iter.chain(_.map { case (k, v) => (k, v.toArray.toIterator) })) { case (k, _) => k < key } }
   }
 
   def fromWithIndex(key: String, lookupPrefixes: Boolean = false): CleanupIterator[((String, Iterator[String]), Int)] = {

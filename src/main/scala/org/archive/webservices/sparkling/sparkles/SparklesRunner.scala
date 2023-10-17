@@ -2,7 +2,7 @@ package org.archive.webservices.sparkling.sparkles
 
 class SparklesRunner[I](from: => Option[(Int, I)]) {
   def loop[O](job: SparklesJob[I, O], print: Boolean = true, n: Int = -1)(loop: (Int, O) => Option[I]): Int = {
-    val (fromIter, fromIn) = from.getOrElse { (0, job.input) }
+    val (fromIter, fromIn) = from.getOrElse((0, job.input))
     var iter = fromIter
     if (print) println("... running iteration " + iter + " ...")
     val out = job.run(iter, fromIn, print)
@@ -26,11 +26,11 @@ class SparklesRunner[I](from: => Option[(Int, I)]) {
 }
 
 object SparklesRunner {
-  def from[I, O](from: => Option[(Int, I)]): SparklesRunner[I] = { new SparklesRunner[I](from) }
+  def from[I, O](from: => Option[(Int, I)]): SparklesRunner[I] = new SparklesRunner[I](from)
 
-  def loop[I, O](job: SparklesJob[I, O], print: Boolean = true, n: Int = -1)(loop: (Int, O) => Option[I]): Int = { new SparklesRunner[I](None).loop[O](job, print, n)(loop) }
+  def loop[I, O](job: SparklesJob[I, O], print: Boolean = true, n: Int = -1)(loop: (Int, O) => Option[I]): Int = new SparklesRunner[I](None).loop[O](job, print, n)(loop)
 
-  def getLoop[I, O](job: SparklesJob[I, O], n: Int, print: Boolean = true)(loop: (Int, O) => Option[I]): O = { new SparklesRunner[I](None).getLoop[O](job, n, print)(loop) }
+  def getLoop[I, O](job: SparklesJob[I, O], n: Int, print: Boolean = true)(loop: (Int, O) => Option[I]): O = new SparklesRunner[I](None).getLoop[O](job, n, print)(loop)
 
   def get[I, O](job: SparklesJob[I, O]): O = job.run(0, job.input)
 }

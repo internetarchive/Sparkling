@@ -99,13 +99,13 @@ object IOUtil {
   }
 
   private val NewLineByte = '\n'.toByte
-  def lines(in: InputStream, filename: Option[String] = None, maxLineLength: Int = 1.mb.toInt): Iterator[String] = {
+  def lines(in: InputStream, filename: Option[String] = None, maxLineLength: Int = 1.mb.toInt, dropLastEmpty: Boolean = true): Iterator[String] = {
     val stream = IOUtil.decompress(in, filename, checkFile = true)
     val buffer = Array.ofDim[Byte](64.kb.toInt)
     var bufferLength = 0
     var bufferPosn = 0
     var eof = false
-    IteratorUtil.whileDefined { // see org.apache.hadoop.util.LineReader#readDefaultLine
+    val lines = IteratorUtil.whileDefined { // see org.apache.hadoop.util.LineReader#readDefaultLine
       if (eof) None else Some {
         var lineLength = 0
         var eol = false
@@ -138,6 +138,7 @@ object IOUtil {
         StringUtil.fromBytes(bytes, charset = DefaultCharset)
       }
     }.map(_.stripSuffix("\r"))
+    if (dropLastEmpty) IteratorUtil.dropLastIf(lines)(_.isEmpty) else lines
   }
 
   def writeLines(file: String, lines: TraversableOnce[String]): Long = {

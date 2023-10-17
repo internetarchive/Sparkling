@@ -1,14 +1,12 @@
 package org.archive.webservices.sparkling.cdx
 
-import org.apache.commons.io.input.ClosedInputStream
-
-import java.io.{IOException, InputStream}
 import org.apache.hadoop.fs.Path
 import org.archive.webservices.sparkling.Sparkling.executionContext
 import org.archive.webservices.sparkling.compression.Gzip
-import org.archive.webservices.sparkling.io.{HdfsIO, InputStreamForker}
+import org.archive.webservices.sparkling.io.InputStreamForker
 import org.archive.webservices.sparkling.warc.WarcRecord
 
+import java.io.InputStream
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, Future}
 import scala.util.Try

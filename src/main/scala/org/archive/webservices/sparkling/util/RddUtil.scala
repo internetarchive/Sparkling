@@ -728,7 +728,6 @@ object RddUtil {
   def saveTextWithIndex(
       rdd: => RDD[String],
       path: String,
-      compress: Boolean = true,
       skipIfExists: Boolean = false,
       checkPerFile: Boolean = false,
       skipEmpty: Boolean = true,

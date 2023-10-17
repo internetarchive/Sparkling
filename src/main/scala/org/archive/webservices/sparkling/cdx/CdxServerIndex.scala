@@ -2,9 +2,14 @@ package org.archive.webservices.sparkling.cdx
 
 import org.apache.hadoop.fs.Path
 import org.apache.spark.rdd.RDD
+import org.archive.webservices.sparkling._
+import org.archive.webservices.sparkling.compression.Gzip
 import org.archive.webservices.sparkling.indexed.{HdfsIndexBackedMap, PrefixIndexLoader, SortedPrefixSeq}
 import org.archive.webservices.sparkling.io.{HdfsBackedMap, HdfsIO, IOUtil}
 import org.archive.webservices.sparkling.util._
+
+import scala.math.pow
+import scala.util.Random
 
 object CdxServerIndex {
   import org.archive.webservices.sparkling.Sparkling._
@@ -172,6 +177,64 @@ object CdxServerIndex {
     new HdfsBackedMap[CdxRecord](primitiveHdfsBackedStrMap(indexDirPath), str => CdxRecord.fromString(str).get)
   }
 
+  def loadRandomSampleStr(indexDirPath: String, num: Int, fromWhile: Option[(String, String => Boolean)] = None, filter: Option[String => Boolean] = None, spread: Int = 5): RDD[String] = {
+    val indexRdd = RddUtil.loadTextFiles(indexDirPath + "/part-*-idx")
+    val indexLines = if (fromWhile.isDefined) {
+      val (from, whileCond) = fromWhile.get
+      val filesRelevant = indexRdd.map { case (file, lines) =>
+        (file, lines.iter(_.headOption).exists(_ >= from))
+      }.collect.sortBy(_._1)
+      val files = IteratorUtil.dropButLast(filesRelevant.toIterator.buffered)(!_._2).map(_._1).toSet
+      val filesBc = sc.broadcast(files)
+      indexRdd.filter { case (file, lines) =>
+        filesBc.value.contains(file) || {
+          lines.clear()
+          false
+        }
+      }.flatMap { case (_, lines) =>
+        val (head, tail) = if (lines.headOption.exists(_ < from)) {
+          val candidates = lines.chain(IteratorUtil.dropButLast(_)(_ < from))
+          (candidates.headOption.toIterator, candidates.chain(_.drop(1)))
+        } else (Iterator.empty, lines)
+        head ++ tail.chain(_.takeWhile(l => whileCond(StringUtil.prefixBySeparator(l, " "))))
+      }
+    } else indexRdd.flatMap(_._2)
+    val indexLinesCount = indexLines.count
+    val indexLinesNum = ((1.0 - pow(Random.nextDouble, spread)) * num).min(indexLinesCount).max(1)
+    val indexRnd = indexLinesNum / indexLinesCount
+    val indexSampled = if (indexRnd < 0) indexLines else indexLines.mapPartitions { partition =>
+      partition.filter(_ => Random.nextDouble < indexRnd)
+    }
+    val cdxPerIndexLine = num.toDouble / indexLinesNum
+    indexSampled.flatMap { idxLine =>
+      val split = RegexUtil.split(idxLine, "\t")
+      val (filename, offset, length) = (split(1) + ".gz", split(2).toLong, split(3).toLong) // filename, offset, length
+      val path = indexDirPath + "/" + filename
+      val compressionFactor = HdfsIO.access(path, offset = offset, length = length, decompress = false)(Gzip.estimateCompressionFactor(_, 1.mb))
+      val size = length * compressionFactor
+      val in = IOUtil.supportMark(HdfsIO.open(path, offset = offset, length = length))
+      val relevantCdxLines = if (fromWhile.isDefined) {
+        val (from, whileCond) = fromWhile.get
+        IOUtil.lines(in).dropWhile(_ < from).takeWhile(l => whileCond(StringUtil.prefixBySeparator(l, " ")))
+      } else IOUtil.lines(in)
+      var selected = 0L
+      var processedBytes = 0L
+      var processedLines = 0L
+      val sample = relevantCdxLines.filter { line =>
+        processedBytes += line.length
+        if (filter.isEmpty || filter.exists(_(line))) {
+          processedLines += 1
+          val totalCdx = size / processedBytes * processedLines
+          if (Random.nextDouble < cdxPerIndexLine / totalCdx) {
+            selected += 1
+            true
+          } else false
+        } else false
+      }
+      IteratorUtil.cleanup(sample, in.close)
+    }
+  }
+
   def loadPartitions(indexDirPath: String, numPartitions: Int, fromWhile: Option[(String, String => Boolean)] = None, surtPrefix: String => String = identity): RDD[(String, Iterator[CdxRecord])] = {
     loadStrPartitions(indexDirPath, numPartitions, fromWhile, surtPrefix).map { case (p, str) => (p, str.flatMap(CdxRecord.fromString)) }
   }
@@ -184,7 +247,7 @@ object CdxServerIndex {
           lines.chain(_.dropWhile(_ < from).takeWhile(l => whileCond(StringUtil.prefixBySeparator(l, " ")))))
       } else (true, lines)
       (file, relevant.iter(IteratorUtil.count), beginning)
-    }.collect
+    }.sortBy(_._1).collect
     val totalLines = files.map(_._2).sum + (if (!files.head._3) 1 else 0)
     val linesPerPartition = (totalLines.toDouble / numPartitions).ceil.toLong
     val prevFile = files.zipWithIndex.find{case ((_, lines, _), _) => lines > 0}.filter{case ((_, _, beginning), i) => i > 0 && beginning}.map{case (_, i) => files(i - 1)._1}
