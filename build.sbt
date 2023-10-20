@@ -33,6 +33,7 @@ lazy val sparkling = (project in file(".")).settings(
     "edu.stanford.nlp" % "stanford-corenlp" % "4.3.1" % "provided",
     "org.brotli" % "dec" % "0.1.2",
     "sh.almond" %% "ammonite-spark" % "0.10.1" % "provided",
+    "com.github.luben" % "zstd-jni" % "1.5.5-6",
     ("com.lihaoyi" % "ammonite-interp" % "1.7.4" % "provided").cross(CrossVersion.full),
     ("com.lihaoyi" % "ammonite-repl" % "1.7.4" % "provided").cross(CrossVersion.full)
   ) ++ Seq("io.circe" %% "circe-core", "io.circe" %% "circe-generic", "io.circe" %% "circe-parser").map(_ % circeVersion)
