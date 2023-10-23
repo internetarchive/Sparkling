@@ -7,6 +7,8 @@ val circeVersion = "0.13.0"
 
 val guava = "com.google.guava" % "guava" % "29.0-jre"
 
+val zstd = "com.github.luben" % "zstd-jni" % "1.5.5-6"
+
 val webarchiveCommons = "org.netpreserve.commons" % "webarchive-commons" % "1.1.8" excludeAll
   (
     ExclusionRule(organization = "org.apache.hadoop", name = "hadoop-core"),
@@ -33,12 +35,15 @@ lazy val sparkling = (project in file(".")).settings(
     "edu.stanford.nlp" % "stanford-corenlp" % "4.3.1" % "provided",
     "org.brotli" % "dec" % "0.1.2",
     "sh.almond" %% "ammonite-spark" % "0.10.1" % "provided",
-    "com.github.luben" % "zstd-jni" % "1.5.5-6",
+    zstd,
     ("com.lihaoyi" % "ammonite-interp" % "1.7.4" % "provided").cross(CrossVersion.full),
     ("com.lihaoyi" % "ammonite-repl" % "1.7.4" % "provided").cross(CrossVersion.full)
   ) ++ Seq("io.circe" %% "circe-core", "io.circe" %% "circe-generic", "io.circe" %% "circe-parser").map(_ % circeVersion)
 )
 
-assemblyShadeRules in assembly := Seq(ShadeRule.rename("com.google.common.**" -> "sparkling.shade.@0").inLibrary(guava, webarchiveCommons).inProject)
+assemblyShadeRules in assembly := Seq(
+  ShadeRule.rename("com.google.common.**" -> "sparkling.shade.@0").inLibrary(guava, webarchiveCommons).inProject,
+  ShadeRule.rename("com.github.luben.zstd.**" -> "com.github.luben.zstd.shaded.@1").inLibrary(zstd).inProject
+)
 
 assemblyOption in assembly := (assemblyOption in assembly).value.copy(includeScala = false)
