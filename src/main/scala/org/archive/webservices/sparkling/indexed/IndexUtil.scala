@@ -1,16 +1,15 @@
 package org.archive.webservices.sparkling.indexed
 
 import java.io.InputStream
-
 import org.archive.webservices.sparkling.io.IOUtil
-import org.archive.webservices.sparkling.util.{IteratorUtil, StringUtil}
+import org.archive.webservices.sparkling.util.{IteratorUtil, MultiBufferedIterator, StringUtil}
 
 import scala.util.Try
 
 object IndexUtil {
-  def filter(lines: TraversableOnce[String], prefixes: Set[String]): Iterator[(String, String)] = filter(lines, prefixes.toSeq.sorted.toIterator.buffered)
+  def filter(lines: TraversableOnce[String], prefixes: Set[String]): Iterator[(String, String)] = filter(lines, MultiBufferedIterator(prefixes.toSeq.sorted.toIterator))
 
-  def filter(lines: TraversableOnce[String], sortedPrefixes: BufferedIterator[String]): Iterator[(String, String)] = StringUtil.matchPrefixes(lines, sortedPrefixes, strict = false)
+  def filter(lines: TraversableOnce[String], sortedPrefixes: MultiBufferedIterator[String]): Iterator[(String, String)] = StringUtil.matchPrefixes(lines, sortedPrefixes, strict = false)
 
   def lineCandidates(index: TraversableOnce[String], prefixes: Set[String]): Iterator[(String, Int)] = lineCandidates(index, SortedPrefixSeq.fromSet(prefixes))
 

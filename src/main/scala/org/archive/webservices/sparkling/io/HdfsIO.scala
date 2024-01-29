@@ -80,17 +80,13 @@ class HdfsIO private (val fs: FileSystem) {
           sleepMillis,
           _.close,
           (_, retry, e) => {
-            "1 File access failed (" + retry + "/" + retries + "): " + path + " (Offset: " + offset + ") - " + e.getClass.getSimpleName + Option(e.getMessage).map(_.trim).filter(_.nonEmpty).map(" - " + _).getOrElse("")
+            "File access failed (" + retry + "/" + retries + "): " + path + " (Offset: " + offset + ") - " + e.getClass.getSimpleName + Option(e.getMessage).map(_.trim).filter(_.nonEmpty).map(" - " + _).getOrElse("")
           }
         ) { (in, retry) =>
           if (retry > 0) in.seekToNewSource(offset) else if (offset > 0) in.seek(offset)
-          val buffered = if (length > 0) new BufferedInputStream(new BoundedInputStream(in, length)) else new BufferedInputStream(in)
-          if (IOUtil.eof(buffered)) {
-            buffered.close()
-            IOUtil.EmptyStream
-          } else buffered
+          if (length > 0) new BoundedInputStream(in, length) else in
         }
-      case HdfsIO.LoadingStrategy.BlockWise => new BufferedInputStream(new HdfsBlockStream(fs, path, offset, length, retries, sleepMillis, HdfsIO.blockReadTimeoutMillis))
+      case HdfsIO.LoadingStrategy.BlockWise => new HdfsBlockStream(fs, path, offset, length, retries, sleepMillis, HdfsIO.blockReadTimeoutMillis)
       case HdfsIO.LoadingStrategy.CopyLocal => Common.retryObj {
           val localCopy = localFiles.synchronized {
             localFiles.getOrElseUpdate(path, {
@@ -105,19 +101,19 @@ class HdfsIO private (val fs: FileSystem) {
           sleepMillis,
           _.close,
           (_, retry, e) => { "File access failed (" + retry + "/" + retries + "): " + path + " - " + e.getClass.getSimpleName + Option(e.getMessage).map(_.trim).filter(_.nonEmpty).map(" - " + _).getOrElse("") }
-        ) { (in, retry) =>
+        ) { (in, _) =>
           if (offset > 0) in.getChannel.position(offset)
-          val buffered = if (length > 0) new BufferedInputStream(new BoundedInputStream(in, length)) else new BufferedInputStream(in)
-          if (IOUtil.eof(buffered)) {
-            buffered.close()
-            IOUtil.EmptyStream
-          } else buffered
+          if (length > 0) new BoundedInputStream(in, length) else in
         }
     }
-    if (decompress) {
-      val decompressed = IOUtil.decompress(in, Some(path))
-      if (decompressed.markSupported()) decompressed else new BufferedInputStream(decompressed)
-    } else in
+    val buffered = IOUtil.supportMark(in)
+    if (IOUtil.eof(buffered)) {
+      buffered.close()
+      IOUtil.EmptyStream
+    } else if (decompress) {
+      val decompressed = IOUtil.decompress(buffered, Some(path))
+      IOUtil.supportMark(decompressed)
+    } else buffered
   }
 
   def access[R](
@@ -181,9 +177,11 @@ class HdfsIO private (val fs: FileSystem) {
 
   def tmpPath[R](action: String => R): R = {
     val path = createTmpPath()
-    val r = action(path)
-    delete(path)
-    r
+    try {
+      action(path)
+    } finally {
+      delete(path)
+    }
   }
 
   def delete(path: String): Unit = if (exists(path)) {
@@ -217,7 +215,7 @@ class HdfsIO private (val fs: FileSystem) {
   }
 
   def writeLines(path: String, lines: => TraversableOnce[String], overwrite: Boolean = false, compress: Boolean = true, useWriter: Boolean = true, skipIfExists: Boolean = false): Long = {
-    if (skipIfExists && exists(path)) 0L
+    if (skipIfExists && exists(path)) return 0L
     val stream = out(path, overwrite, compress, useWriter)
     val processed = IOUtil.writeLines(stream, lines)
     Try(stream.close())

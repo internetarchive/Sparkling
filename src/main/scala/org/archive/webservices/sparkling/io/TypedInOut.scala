@@ -29,10 +29,10 @@ object TypedInOut {
     override def in(inStream: InputStream): Iterator[A] = reader(inStream)
   }
 
-  implicit val stringInOut: TypedInOut[String] = TypedInOut(IOUtil.print(_), IOUtil.lines(_))((r, o) => o.println(r), _.flush(), _.close())
+  implicit val stringInOut: TypedInOut[String] = TypedInOut(IOUtil.print(_), IOUtil.lines(_, maxLineLength = -1))((r, o) => o.println(r), _.flush(), _.close())
 
   implicit val cdxInOut: TypedInOut[CdxRecord] = toStringInOut(_.toCdxString, CdxRecord.fromString(_).get)
 
   def toStringInOut[A](toString: A => String, fromString: String => A): TypedInOut[A] =
-    TypedInOut(IOUtil.print(_), IOUtil.lines(_).map(fromString))((r, o) => o.println(toString(r)), _.flush(), _.close())
+    TypedInOut(IOUtil.print(_), IOUtil.lines(_, maxLineLength = -1).map(fromString))((r, o) => o.println(toString(r)), _.flush(), _.close())
 }

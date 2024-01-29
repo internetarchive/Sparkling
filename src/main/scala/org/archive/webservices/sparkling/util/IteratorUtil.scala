@@ -1,12 +1,12 @@
 package org.archive.webservices.sparkling.util
 
-import java.util.concurrent.{CancellationException, FutureTask}
-
+import org.archive.webservices.sparkling.Sparkling
 import org.archive.webservices.sparkling.logging.{Log, LogContext}
 
+import java.util.concurrent.{CancellationException, FutureTask}
 import scala.annotation.tailrec
 import scala.concurrent.duration.Duration
-import scala.concurrent.{Await, Future}
+import scala.concurrent.{Await, ExecutionContext, Future}
 
 object IteratorUtil {
   implicit val logContext: LogContext = LogContext(this)
@@ -269,9 +269,24 @@ object IteratorUtil {
     } else None
   }
 
+  def mapSliding[A, B](iter: Iterator[A], sliding: Int = 0)(map: A => B): Iterator[B] = {
+    if (sliding <= 1) iter.map(map)
+    else {
+      (iter.map(a => map(a)) ++ (1 until sliding).toIterator.map(_ => null)).sliding(sliding).map(_.head.asInstanceOf[B])
+    }
+  }
+
+  def mapFutures[A, B](iter: Iterator[A], sliding: Int = 0)(map: A => B)(implicit executionContext: ExecutionContext = Sparkling.executionContext): Iterator[Future[B]] = {
+    mapSliding(iter, sliding)(a => Future(map(a)))
+  }
+
+  def mapPreload[A, B](iter: Iterator[A], numPreload: Int = 0)(map: A => B): Iterator[B] = {
+    mapFutures(iter, numPreload)(map).map(Await.result(_, Duration.Inf))
+  }
+
   def preload[A, B](iter: Iterator[A], numPreload: Int = 0, parallelism: Int = 2, skipNotKill: Boolean = false, cancelNotWait: Boolean = false)(preload: A => B): Iterator[B] = {
     if (numPreload == 0) iter.map(preload(_))
-    else { parallelMap[A, B](iter, parallelism = parallelism, maxBuffer = numPreload, skipNotKill = skipNotKill, cancelNotWait = cancelNotWait)(preload).flatten }
+    else parallelMap[A, B](iter, parallelism = parallelism, maxBuffer = numPreload, skipNotKill = skipNotKill, cancelNotWait = cancelNotWait)(preload).flatten
   }
 
   def parallelMapKill[A, B](iter: Iterator[A], parallelism: Int = 5, maxBuffer: Int = 100)(map: A => B): Iterator[B] = {

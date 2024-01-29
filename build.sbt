@@ -1,13 +1,13 @@
 import sbt.ExclusionRule
 import sbt.Keys._
 
-lazy val commonSettings = Seq(name := "sparkling", organization := "org.archive.webservices", version := "0.3.7-SNAPSHOT", scalaVersion := "2.12.8", fork := true)
+lazy val commonSettings = Seq(name := "sparkling", organization := "org.archive.webservices", version := "0.3.8-SNAPSHOT", scalaVersion := "2.12.8", fork := true)
 
 val circeVersion = "0.13.0"
 
 val guava = "com.google.guava" % "guava" % "29.0-jre"
 
-val zstd = "com.github.luben" % "zstd-jni" % "1.5.5-6"
+val failureaccess = "com.google.guava" % "failureaccess" % "1.0.1"
 
 val webarchiveCommons = "org.netpreserve.commons" % "webarchive-commons" % "1.1.8" excludeAll
   (
@@ -21,6 +21,7 @@ lazy val sparkling = (project in file(".")).settings(
   commonSettings,
   libraryDependencies ++= Seq(
     guava,
+    failureaccess,
     "commons-codec" % "commons-codec" % "1.12",
     "org.apache.commons" % "commons-compress" % "1.14",
     "org.apache.hadoop" % "hadoop-client" % "2.6.0" % "provided",
@@ -35,15 +36,18 @@ lazy val sparkling = (project in file(".")).settings(
     "edu.stanford.nlp" % "stanford-corenlp" % "4.3.1" % "provided",
     "org.brotli" % "dec" % "0.1.2",
     "sh.almond" %% "ammonite-spark" % "0.10.1" % "provided",
-    zstd,
     ("com.lihaoyi" % "ammonite-interp" % "1.7.4" % "provided").cross(CrossVersion.full),
-    ("com.lihaoyi" % "ammonite-repl" % "1.7.4" % "provided").cross(CrossVersion.full)
+    ("com.lihaoyi" % "ammonite-repl" % "1.7.4" % "provided").cross(CrossVersion.full),
+    "com.amazonaws" % "aws-java-sdk" % "1.7.4" % "provided"
   ) ++ Seq("io.circe" %% "circe-core", "io.circe" %% "circe-generic", "io.circe" %% "circe-parser").map(_ % circeVersion)
 )
 
 assemblyShadeRules in assembly := Seq(
-  ShadeRule.rename("com.google.common.**" -> "sparkling.shade.@0").inLibrary(guava, webarchiveCommons).inProject,
-  ShadeRule.rename("com.github.luben.zstd.**" -> "com.github.luben.zstd.shaded.@1").inLibrary(zstd).inProject
-)
+  ShadeRule.rename("com.google.common.**" -> "sparkling.shade.@0").inLibrary(guava, failureaccess, webarchiveCommons).inProject)
 
 assemblyOption in assembly := (assemblyOption in assembly).value.copy(includeScala = false)
+
+assemblyMergeStrategy in assembly := {
+  case PathList("META-INF", xs @ _*) => MergeStrategy.discard
+  case _ => MergeStrategy.first
+}

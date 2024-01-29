@@ -1,13 +1,12 @@
 package org.archive.webservices.sparkling.indexed
 
 import java.io.InputStream
-
 import org.apache.hadoop.fs.Path
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 import org.archive.webservices.sparkling.io.{HdfsIO, IOUtil}
-import org.archive.webservices.sparkling.util.{CleanupIterator, IteratorUtil, RddUtil}
+import org.archive.webservices.sparkling.util.{CleanupIterator, IteratorUtil, MultiBufferedIterator, RddUtil}
 
 import scala.reflect.ClassTag
 import scala.util.Try
@@ -99,7 +98,7 @@ object PrefixIndexLoader {
       } else index
     repartitioned.flatMap { pointer =>
       val in = HdfsIO.open(pointer.path, pointer.position.offset, pointer.position.length)
-      IteratorUtil.cleanup(IndexUtil.filter(IOUtil.lines(in), prefixBroadcast.value.drop(pointer.prefixIdx)).map(_._1).filter(filter), in.close)
+      IteratorUtil.cleanup(IndexUtil.filter(IOUtil.lines(in), MultiBufferedIterator(prefixBroadcast.value.drop(pointer.prefixIdx))).map(_._1).filter(filter), in.close)
     }
   }
 
@@ -147,8 +146,11 @@ object PrefixIndexLoader {
       { streams =>
         streams.flatMap { stream =>
           val buffered = IOUtil.lines(stream).buffered
-          if (buffered.hasNext) prefixBroadcast.value.from(buffered.head).chain { prefixes => IndexUtil.filter(IOUtil.lines(stream), prefixes).map(_._1).filter(filter) }
-          else Iterator.empty
+          if (buffered.hasNext) {
+            prefixBroadcast.value.from(buffered.head).chain { prefixes =>
+              IndexUtil.filter(IOUtil.lines(stream), MultiBufferedIterator(prefixes)).map(_._1).filter(filter)
+            }
+          } else Iterator.empty
         }
       },
       sorted = sorted
@@ -200,9 +202,10 @@ object PrefixIndexLoader {
       val files = filesBroadcast.value
       val filePath = pointer.path
       val fileIdx = files.indexOf(filePath)
-      prefixBroadcast.value.drop(pointer.prefixIdx).chain { prefixes =>
-        if (fileIdx < 0 || !prefixes.hasNext) Iterator.empty
+      prefixBroadcast.value.drop(pointer.prefixIdx).chain { p =>
+        if (fileIdx < 0 || !p.hasNext) Iterator.empty
         else {
+          val prefixes = MultiBufferedIterator(p)
           val in = HdfsIO.open(filePath, offset = pointer.position.offset, length = pointer.position.length, decompress = false)
 
           val lines = IteratorUtil.cleanup(IOUtil.lines(in, Some(filePath)), in.close)

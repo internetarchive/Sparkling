@@ -45,7 +45,19 @@ object RddUtil {
 
   def collectNoOrder[T: ClassTag](rdd: RDD[T]): Seq[T] = rdd.mapPartitions { records => Iterator((true, records.toList)) }.reduceByKey(_ ++ _, 1).values.take(1).toSeq.flatten
 
-  def reduce[T: ClassTag](rdd: RDD[T])(reduce: (T, T) => T): T = rdd.mapPartitions { records => Iterator((true, records.reduce(reduce))) }.reduceByKey(reduce, 1).values.take(1).head
+  def reduce[T: ClassTag](rdd: RDD[T])(reduce: (T, T) => T): T = {
+    rdd.mapPartitions { records =>
+      Iterator((true, records.reduce(reduce)))
+    }.reduceByKey(reduce, 1).values.take(1).head
+  }
+
+  def reduceByKey[K: ClassTag, A: ClassTag](rdd: RDD[(K, A)], reduce: (A, A) => A): RDD[(K, A)] = {
+    rdd.mapPartitions { partition =>
+      val cache = collection.mutable.Map.empty[K, A]
+      for ((k, v) <- partition) cache.update(k, cache.get(k).map(reduce(_, v)).getOrElse(v))
+      cache.toIterator
+    }.reduceByKey(reduce, numPartitions = Sparkling.parallelism)
+  }
 
   def iteratePartitions[D: ClassTag](rdd: RDD[D]): Iterator[Seq[D]] = {
     val persisted = rdd.persist(StorageLevel.MEMORY_AND_DISK)
@@ -360,6 +372,15 @@ object RddUtil {
   ): RDD[(String, Seq[ManagedVal[Iterator[V]]])] = {
     val joinMaps = joinPaths.map(HdfsBackedMap(_, groupBy, parse, cache = false, preloadLength = false, groupFiles = groupFiles))
     cogroup(sortedRdd, joinMaps, fromWhile)
+  }
+
+  def joinGroups[V: ClassTag](sortedRdd: RDD[(String, V)], joinPath: String, fromWhile: Option[(String, String => Boolean)] = None, groupFiles: Int = 1)(groupBy: String => String): RDD[(String, (Iterator[V], Iterator[String]))] = {
+    val joinMaps = Seq(joinPath).map(HdfsBackedMap(_, groupBy, _.asInstanceOf[Any], cache = false, preloadLength = false, groupFiles = groupFiles))
+    val grouped = RddUtil.groupSortedBy(sortedRdd)(_._1).mapValues(iter => ManagedVal(iter.map(_._2.asInstanceOf[Any])))
+    cogroup(grouped, joinMaps, fromWhile).map { case (key, values) =>
+      val Seq(a, b) = values
+      (key, (a.option.toIterator.flatMap(_.map(_.asInstanceOf[V])), b.option.toIterator.flatMap(_.map(_.asInstanceOf[String]))))
+    }
   }
 
   def cogroupMap[V: ClassTag](
@@ -923,10 +944,11 @@ object RddUtil {
         Iterator(cacheFile.getCanonicalPath)
       }
     }.persist(StorageLevel.DISK_ONLY)
-    lazyMapPartitions(new CacheLayerRDD(cached)) { (idx, records) =>
+    val loaded = lazyMapPartitions(new CacheLayerRDD(cached)) { (idx, records) =>
       val in = new GZIPInputStream(new FileInputStream(records.next))
       IteratorUtil.cleanup(inout.in(in), in.close)
     }
+    new CacheLoadedRDD(loaded, cached)
   }
 
   def logProgress[A: ClassTag](rdd: RDD[A], id: Option[String] = None, logMod: Int = 1, chunkSize: Int = -1, state: Option[A => String] = None): RDD[A] = {

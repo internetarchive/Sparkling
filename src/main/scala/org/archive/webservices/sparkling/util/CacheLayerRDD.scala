@@ -16,7 +16,7 @@ class CacheLayerRDD(private var prev: RDD[String]) extends RDD[String](prev) {
 
   override protected def getPartitions: Array[Partition] = firstParent[String].partitions
 
-  override def clearDependencies() {
+  override def clearDependencies(): Unit = {
     super.clearDependencies()
     prev = null
   }

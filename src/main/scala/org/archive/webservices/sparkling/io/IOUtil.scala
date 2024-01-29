@@ -70,10 +70,10 @@ object IOUtil {
 
   def fileBuffer(write: OutputStream => Unit, lazyEval: Boolean = false): ManagedVal[ValueSupplier[InputStream]] = {
     lazy val streams = collection.mutable.Buffer.empty[InputStream]
-    lazy val file = IOUtil.tmpFile
+    lazy val file = tmpFile
     ManagedVal(
       {
-        val stream = IOUtil.fileOut(file)
+        val stream = fileOut(file)
         try { write(stream) }
         finally { stream.close() }
         ValueSupplier { Common.touch(new BufferedInputStream(new FileInputStream(file)))(streams += _) }
@@ -127,7 +127,8 @@ object IOUtil {
                 } else true
               }) bufferPosn += 1
               val readLength = bufferPosn - startPosn
-              val appendLength = (readLength - (if (eol) 1 else 0)).min(maxLineLength - lineLength)
+              val maxLength = readLength - (if (eol) 1 else 0)
+              val appendLength = if (maxLineLength < 0) maxLength else maxLength.min(maxLineLength - lineLength)
               if (appendLength > 0) {
                 lineLength += appendLength
                 buffer.slice(startPosn, startPosn + appendLength)

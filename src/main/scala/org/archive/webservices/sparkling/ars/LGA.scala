@@ -7,7 +7,7 @@ import org.apache.spark.storage.StorageLevel
 import org.archive.webservices.sparkling.Sparkling
 import org.archive.webservices.sparkling.html.{HtmlProcessor, LinkExtractor}
 import org.archive.webservices.sparkling.http.HttpMessage
-import org.archive.webservices.sparkling.io.IOUtil
+import org.archive.webservices.sparkling.io.{HdfsIO, IOUtil}
 import org.archive.webservices.sparkling.util.{IteratorUtil, RddUtil, SurtUtil}
 import org.archive.webservices.sparkling.warc.WarcRecord
 
@@ -84,20 +84,59 @@ object LGA {
     r
   }
 
+  private def flatMap(parsed: RDD[((LgaLabel, String), Iterator[LgaLabel])])(saveAndLoadMap: RDD[LgaNode] => RDD[LgaNode]): (RDD[(String, String, String, String, String)], RDD[(String, Long)]) = {
+    // turn parsed types into flat string tuples
+    val flat = parsed.flatMap { case ((src, ts), dsts) => dsts.map(dst => (src.surt, src.url, ts, dst.surt, dst.url)) }
+    // group them again, as before, but as raw strings
+    val grouped = flat.mapPartitions { tuples =>
+      IteratorUtil.groupSortedBy(tuples) { case (surt, url, ts, _, _) => (surt, url, ts) }.map { case (src, dsts) => (src, dsts.map { case (_, _, _, surt, url) => (surt, url) }) }
+    }
+    val map = parsedStringsToMap(grouped)
+    (flat, saveAndLoadMap(map).map(n => (n.label.surt, n.id)))
+  }
+
   def parsedToGraph[R](parsed: RDD[((LgaLabel, String), Iterator[LgaLabel])])(saveAndLoadMap: RDD[LgaNode] => RDD[LgaNode])(graph: RDD[LgaAdjacencyList] => R): R = {
     val numPartitions = parsed.getNumPartitions
-
-    val flat = parsed.flatMap { case ((src, ts), dsts) => dsts.map(dst => (src.surt, src.url, ts, dst.surt, dst.url)) }
-    val map = parsedStringsToMap(flat.mapPartitions { tuples =>
-      IteratorUtil.groupSortedBy(tuples) { case (surt, url, ts, _, _) => (surt, url, ts) }.map { case (src, dsts) => (src, dsts.map { case (_, _, _, surt, url) => (surt, url) }) }
-    })
-    val surtIds = saveAndLoadMap(map).map(n => (n.label.surt, n.id))
+    val (flat, surtIds) = flatMap(parsed)(saveAndLoadMap)
     val srcMapped = flat.map { case (srcSurt, _, ts, dstSurt, _) => (srcSurt, (ts, dstSurt)) }.join(surtIds, numPartitions).map { case (_, ((ts, dst), srcId)) => ((srcId, ts), dst) }
     val dstMapped = srcMapped.map { case ((src, ts), dst) => (dst, (ts, src)) }.join(surtIds, numPartitions).map { case (_, ((ts, srcId), dstId)) => ((srcId, ts), dstId) }
-    val r = graph(dstMapped.aggregateByKey(Set.empty[Long])((dsts, dstId) => dsts + dstId, (dsts1, dsts2) => dsts1 ++ dsts2).map { case ((srcId, timestamp), dstIds) =>
+    graph(dstMapped.aggregateByKey(Set.empty[Long])((dsts, dstId) => dsts + dstId, (dsts1, dsts2) => dsts1 ++ dsts2).map { case ((srcId, timestamp), dstIds) =>
       LgaAdjacencyList(srcId, timestamp, dstIds)
     })
-    r
+  }
+
+  def parsedToBigGraph[R](parsed: RDD[((LgaLabel, String), Iterator[LgaLabel])])(saveAndLoadMap: RDD[LgaNode] => RDD[LgaNode])(graph: RDD[LgaAdjacencyList] => R): R = {
+    val numPartitions = parsed.getNumPartitions
+    val (flat, surtIds) = flatMap(parsed)(saveAndLoadMap)
+    HdfsIO.tmpPath { tmp =>
+      val tmpMapDir = tmp + "/map.gz"
+      val sortedSurt = RddUtil.sortByAndWithinPartitions(surtIds, numPartitions)(_._1)
+      RddUtil.saveAsTextFile(sortedSurt.map{case (surt, id) => surt + "\t" + id}, tmpMapDir)
+
+      val flatDstSorted = RddUtil.sortByAndWithinPartitions(flat.map { case (srcSurt, _, ts, dstSurt, _) => (dstSurt, (ts, srcSurt)) }, numPartitions)(_._1)
+      val dstMapped = RddUtil.joinGroups(flatDstSorted, tmpMapDir + "/*.gz")(_.split('\t').head).flatMap { case (_, (graph, map)) =>
+        if (graph.hasNext && map.hasNext) {
+          val dstId = map.next.split('\t')(1).toLong
+          graph.map { case (ts, src) =>
+            (src, (ts, dstId))
+          }
+        } else Iterator.empty
+      }
+
+      val flatSrcSorted = RddUtil.sortByAndWithinPartitions(dstMapped, numPartitions)(_._1)
+      val srcMapped = RddUtil.joinGroups(flatSrcSorted, tmpMapDir + "/*.gz")(_.split('\t').head).flatMap { case (_, (graph, map)) =>
+        if (graph.hasNext && map.hasNext) {
+          val srcId = map.next.split('\t')(1).toLong
+          graph.map { case (ts, dstId) =>
+            ((srcId, ts), dstId)
+          }
+        } else Iterator.empty
+      }
+
+      graph(RddUtil.groupSortedBy(srcMapped)(_._1).map { case ((srcId, ts), dsts) =>
+        LgaAdjacencyList(srcId, ts, dsts.map(_._2).toSet)
+      })
+    }
   }
 
   def parseNode(json: String): Option[LgaNode] = {

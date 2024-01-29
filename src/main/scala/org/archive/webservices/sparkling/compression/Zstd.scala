@@ -2,7 +2,7 @@ package org.archive.webservices.sparkling.compression
 
 import java.io.{ByteArrayInputStream, InputStream}
 
-import com.github.luben.zstd.ZstdInputStream
+import com.github.luben.zstd.shaded.ZstdInputStream
 import org.archive.webservices.sparkling._
 import org.archive.webservices.sparkling.io.IOUtil
 import org.archive.webservices.sparkling.util.{BytesUtil, CacheMap}

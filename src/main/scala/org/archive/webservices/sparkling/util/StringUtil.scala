@@ -74,12 +74,16 @@ object StringUtil {
 
   def padNum(num: Long, length: Int): String = padLeft(num.toString, length, '0')
 
-  def filterPrefixes(strings: Set[String], prefixes: Set[String]): TraversableOnce[String] = filterPrefixes(strings.toSeq.sorted, prefixes.toSeq.sorted.toIterator.buffered)
+  def filterPrefixes(strings: Set[String], prefixes: Set[String]): TraversableOnce[String] = filterPrefixes(strings.toSeq.sorted, prefixes.toSeq.sorted.toIterator)
 
-  def filterPrefixes(sortedStrings: TraversableOnce[String], sortedPrefixes: BufferedIterator[String], strict: Boolean = true): Iterator[String] = matchPrefixes(sortedStrings, sortedPrefixes, strict)
+  def filterPrefixes(sortedStrings: TraversableOnce[String], sortedPrefixes: Iterator[String], strict: Boolean = true): Iterator[String] = matchPrefixes(sortedStrings, sortedPrefixes, strict)
     .map(_._1)
 
-  def matchPrefixes(sortedStrings: TraversableOnce[String], sortedPrefixes: BufferedIterator[String], strict: Boolean = true): Iterator[(String, String)] = {
+  def matchPrefixes(sortedStrings: TraversableOnce[String], sortedPrefixes: Iterator[String], strict: Boolean = true): Iterator[(String, String)] = {
+    matchPrefixes(sortedStrings, MultiBufferedIterator(sortedPrefixes), strict)
+  }
+
+  def matchPrefixes(sortedStrings: TraversableOnce[String], sortedPrefixes: MultiBufferedIterator[String], strict: Boolean): Iterator[(String, String)] = {
     if (sortedPrefixes.isEmpty || sortedStrings.isEmpty) return Iterator.empty
     var prevLine = ""
     IteratorUtil.zipNext(sortedStrings.toIterator).flatMap { case (line, next) =>
@@ -95,7 +99,7 @@ object StringUtil {
             if (line > sortedPrefixes.head) IteratorUtil.dropWhile(sortedPrefixes)(prefix => prefix < line && !line.startsWith(prefix))
             sortedPrefixes.hasNext && line.startsWith(sortedPrefixes.head)
           })
-        ) Some((line, sortedPrefixes.head))
+        ) Some((line, IteratorUtil.last(sortedPrefixes.ahead.takeWhile(_ <= line)).get))
         else None
       }
     }
