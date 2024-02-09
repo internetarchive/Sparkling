@@ -33,27 +33,35 @@ class HdfsBlockStream(fs: FileSystem, file: String, offset: Long = 0, length: Lo
       val nextBlockLength = ((end - (end % blockSize)).min(max) - pos).toInt
       val blockLength = if (peek) PeekBlockSize.min(nextBlockLength) else nextBlockLength
       peek = false
+      var readLength = 0
       Common.retryObj(fs.open(path, blockLength))(
         retries,
         sleepMillis,
         _.close,
         (_, retry, e) => { "File access failed (" + retry + "/" + retries + "): " + path + " (Offset: " + pos + ") - " + e.getClass.getSimpleName + Option(e.getMessage).map(_.trim).filter(_.nonEmpty).map(" - " + _).getOrElse("") }
-      ) { (in, retry) =>
-        Common.timeoutWithReporter(blockReadTimeoutMillis) { reporter =>
-          reporter.alive("Reading " + path + " (Offset: " + pos + ")")
-          try {
-            if (retry > 0) in.seekToNewSource(pos) else if (pos > 0) in.seek(pos)
-            var readLength = 0
+      ) { (in, _) =>
+        try {
+          Common.timeoutWithReporter(blockReadTimeoutMillis) { reporter =>
+            reporter.alive("Reading " + path + " (Offset: " + pos + ")")
+            if (pos > 0) {
+              if (Try(in.seek(pos)).isFailure) {
+                if (!Try(in.seekToNewSource(pos)).getOrElse(false)) {
+                  in.seek(pos)
+                }
+              }
+            }
             while (readLength < blockLength) {
               reporter.alive()
               val read = in.read(buffer, readLength, blockLength - readLength)
               readLength += read
               pos += read
             }
-          } finally { Try(in.close()) }
+          }
+        } finally {
+          in.close()
         }
       }
-      block = new ByteArrayInputStream(buffer, 0, blockLength)
+      block = new ByteArrayInputStream(buffer, 0, readLength)
       System.gc()
     }
     block
@@ -82,6 +90,7 @@ class HdfsBlockStream(fs: FileSystem, file: String, offset: Long = 0, length: Lo
   override def close(): Unit = {
     block = emptyBlock
     buffer = Array.emptyByteArray
+    System.gc()
   }
 
   override def markSupported(): Boolean = false

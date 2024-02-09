@@ -1,13 +1,12 @@
 package org.archive.webservices.sparkling.io
 
-import com.amazonaws.auth.profile.ProfileCredentialsProvider
-import com.amazonaws.{AmazonServiceException, AmazonWebServiceClient, ClientConfiguration}
 import com.amazonaws.auth.{AWSCredentials, AWSCredentialsProvider, AnonymousAWSCredentials, BasicAWSCredentials}
-import com.amazonaws.services.s3.{AmazonS3Client, S3ClientOptions}
 import com.amazonaws.services.s3.model.ObjectMetadata
 import com.amazonaws.services.s3.transfer.{TransferManager, Upload}
+import com.amazonaws.services.s3.{AmazonS3Client, S3ClientOptions}
+import com.amazonaws.{AmazonServiceException, ClientConfiguration}
 
-import java.io.{BufferedInputStream, File, FileInputStream, InputStream, OutputStream, PrintStream}
+import java.io._
 
 object S3Client {
   object AnonymousAWSCredentialsProvider extends AWSCredentialsProvider {

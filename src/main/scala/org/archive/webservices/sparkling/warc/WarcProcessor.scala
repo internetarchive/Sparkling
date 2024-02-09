@@ -1,18 +1,15 @@
 package org.archive.webservices.sparkling.warc
 
-import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream
-import org.apache.commons.io.output.CountingOutputStream
-
-import java.io._
 import org.apache.hadoop.fs.Path
 import org.apache.spark.rdd.RDD
 import org.archive.webservices.sparkling.budget.BudgetRddManager
 import org.archive.webservices.sparkling.cdx.CdxRecord
-import org.archive.webservices.sparkling.compression.{Compression, Gzip, GzipBytes, Zstd}
-import org.archive.webservices.sparkling.io.{CleanupInputStream, HdfsIO, IOUtil, NonClosingOutputStream}
+import org.archive.webservices.sparkling.compression.{Gzip, GzipBytes, Zstd}
+import org.archive.webservices.sparkling.io.{CleanupInputStream, HdfsIO, IOUtil}
 import org.archive.webservices.sparkling.logging.{Log, LogContext}
 import org.archive.webservices.sparkling.util._
 
+import java.io._
 import scala.reflect.ClassTag
 
 object WarcProcessor {

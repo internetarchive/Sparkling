@@ -3,7 +3,6 @@ package org.archive.webservices.sparkling.io
 import java.io.{FileSystem => _, _}
 import java.net.URI
 import java.util.zip.GZIPOutputStream
-
 import org.apache.commons.io.input.BoundedInputStream
 import org.apache.hadoop.fs._
 import org.apache.spark.deploy.SparkHadoopUtil
@@ -82,8 +81,14 @@ class HdfsIO private (val fs: FileSystem) {
           (_, retry, e) => {
             "File access failed (" + retry + "/" + retries + "): " + path + " (Offset: " + offset + ") - " + e.getClass.getSimpleName + Option(e.getMessage).map(_.trim).filter(_.nonEmpty).map(" - " + _).getOrElse("")
           }
-        ) { (in, retry) =>
-          if (retry > 0) in.seekToNewSource(offset) else if (offset > 0) in.seek(offset)
+        ) { (in, _) =>
+          if (offset > 0) {
+            if (Try(in.seek(offset)).isFailure) {
+              if (!Try(in.seekToNewSource(offset)).getOrElse(false)) {
+                in.seek(offset)
+              }
+            }
+          }
           if (length > 0) new BoundedInputStream(in, length) else in
         }
       case HdfsIO.LoadingStrategy.BlockWise => new HdfsBlockStream(fs, path, offset, length, retries, sleepMillis, HdfsIO.blockReadTimeoutMillis)
