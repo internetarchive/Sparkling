@@ -89,12 +89,14 @@ object Zstd extends Zstd {
 
   def isCompressed(in: InputStream): Boolean = {
     in.mark(4)
-    val buffer = Array.ofDim[Byte](4)
-    if (IOUtil.read(in, buffer)) {
-      val isCompressed = buffer.sameElements(FileMagic) || buffer.sameElements(RecordMagic)
+    try {
+      val buffer = Array.ofDim[Byte](4)
+      if (IOUtil.read(in, buffer)) {
+        buffer.sameElements(FileMagic) || buffer.sameElements(RecordMagic)
+      } else false
+    } finally {
       in.reset()
-      isCompressed
-    } else false
+    }
   }
 
   def initContext(close: Boolean = true)(in: => InputStream)(implicit context: DecompressionContext): Option[InputStream] = {

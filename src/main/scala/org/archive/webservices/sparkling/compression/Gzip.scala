@@ -17,9 +17,12 @@ object Gzip extends Decompressor {
 
   def isCompressed(in: InputStream): Boolean = {
     in.mark(2)
-    val (b0, b1) = (in.read, in.read)
-    in.reset()
-    b0 == Magic0 && b1 == Magic1
+    try {
+      val (b0, b1) = (in.read, in.read)
+      b0 == Magic0 && b1 == Magic1
+    } finally {
+      in.reset()
+    }
   }
 
   def isCompressed(filename: String): Boolean = filename.toLowerCase.endsWith(GzipExt)

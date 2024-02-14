@@ -34,6 +34,15 @@ class HdfsBlockStream(fs: FileSystem, file: String, offset: Long = 0, length: Lo
       val blockLength = if (peek) PeekBlockSize.min(nextBlockLength) else nextBlockLength
       peek = false
       var readLength = 0
+      def readBlock(reporter: Common.ProcessReporter, in: InputStream): Boolean = {
+        while (readLength < blockLength) {
+          reporter.alive()
+          val read = in.read(buffer, readLength, blockLength - readLength)
+          readLength += read
+          pos += read
+        }
+        true
+      }
       Common.retryObj(fs.open(path, blockLength))(
         retries,
         sleepMillis,
@@ -44,18 +53,19 @@ class HdfsBlockStream(fs: FileSystem, file: String, offset: Long = 0, length: Lo
           Common.timeoutWithReporter(blockReadTimeoutMillis) { reporter =>
             reporter.alive("Reading " + path + " (Offset: " + pos + ")")
             if (pos > 0) {
-              if (Try(in.seek(pos)).isFailure) {
-                if (!Try(in.seekToNewSource(pos)).getOrElse(false)) {
+              if (Try {
+                in.seek(pos)
+                readBlock(reporter, in)
+              }.isFailure) {
+                val retryNewSource = Try {
+                  in.seekToNewSource(pos) && readBlock(reporter, in)
+                }.getOrElse(false)
+                if (!retryNewSource) {
                   in.seek(pos)
+                  readBlock(reporter, in)
                 }
               }
-            }
-            while (readLength < blockLength) {
-              reporter.alive()
-              val read = in.read(buffer, readLength, blockLength - readLength)
-              readLength += read
-              pos += read
-            }
+            } else readBlock(reporter, in)
           }
         } finally {
           in.close()

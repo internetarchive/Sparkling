@@ -50,7 +50,7 @@ object Common {
     throw lastException
   }
 
-  private[util] class ProcessReporter {
+  class ProcessReporter private[util] () {
     private var _done: Boolean = false
     private var _time: Long = System.currentTimeMillis
     private var _status: Option[String] = None

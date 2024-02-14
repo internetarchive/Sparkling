@@ -27,8 +27,8 @@ object WarcProcessor {
   ): Long = {
     HdfsIO.ensureOutDir(destPath, ensureNew = false)
 
-    val bytesReservedForHeader = {
-      val headerBytes = WarcHeaders.warcFile(warcHeader, StringUtil.stripSuffixes(new Path(destPath).getName, GzipExt, WarcExt, ArcExt) + "-00000-WARC" + WarcExt + CdxExt + GzipExt)
+    val bytesReservedForWarcHeader = {
+      val headerBytes = WarcHeaders.warcFile(warcHeader, StringUtil.stripSuffixes(new Path(destPath).getName, GzipExt, WarcExt, ArcExt) + "-00000-WARC" + WarcExt + GzipExt)
       val compressedHeader = if (gzipped) GzipBytes(headerBytes) else headerBytes
       compressedHeader.length
     }
@@ -37,14 +37,20 @@ object WarcProcessor {
       val location = record.locationFromAdditionalFields._1
       StringUtil.stripSuffixes(location.toLowerCase, GzipExt, ZstdExt).endsWith(WarcExt)
     }
-    val warcsRepartitioned = BudgetRddManager.repartitionByBudget(warcs, maxFileSize - bytesReservedForHeader, repartitionBufferSize)(_.compressedSize)
+    val warcsRepartitioned = BudgetRddManager.repartitionByBudget(warcs, maxFileSize - bytesReservedForWarcHeader, repartitionBufferSize)(_.compressedSize)
     val warcCount = extractWarcsByCdx(warcsRepartitioned, warcHeader, destPath, generateCdx, gzipped, checkPath = false)(request)
+
+    val bytesReservedForArcHeader = {
+      val headerBytes = WarcHeaders.arcFile(warcHeader, StringUtil.stripSuffixes(new Path(destPath).getName, GzipExt, WarcExt, ArcExt) + "-00000-ARC" + ArcExt + GzipExt)
+      val compressedHeader = if (gzipped) GzipBytes(headerBytes) else headerBytes
+      compressedHeader.length
+    }
 
     val arcs = cdx.filter { record =>
       val location = record.locationFromAdditionalFields._1
       StringUtil.stripSuffix(location.toLowerCase, GzipExt).endsWith(ArcExt)
     }
-    val arcsRepartitioned = BudgetRddManager.repartitionByBudget(arcs, maxFileSize - bytesReservedForHeader, repartitionBufferSize)(_.compressedSize)
+    val arcsRepartitioned = BudgetRddManager.repartitionByBudget(arcs, maxFileSize - bytesReservedForArcHeader, repartitionBufferSize)(_.compressedSize)
     val arcCount = extractWarcsByCdx(arcsRepartitioned, warcHeader, destPath, generateCdx, gzipped, checkPath = false)(request)
 
     warcCount + arcCount
