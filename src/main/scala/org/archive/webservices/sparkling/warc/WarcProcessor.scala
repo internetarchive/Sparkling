@@ -2,6 +2,7 @@ package org.archive.webservices.sparkling.warc
 
 import org.apache.hadoop.fs.Path
 import org.apache.spark.rdd.RDD
+import org.archive.webservices.sparkling._
 import org.archive.webservices.sparkling.budget.BudgetRddManager
 import org.archive.webservices.sparkling.cdx.CdxRecord
 import org.archive.webservices.sparkling.compression.{Gzip, GzipBytes, Zstd}
@@ -18,7 +19,9 @@ object WarcProcessor {
   import org.archive.webservices.sparkling.Sparkling._
 
   var repartitionBufferSize: Int = prop(10000000)(repartitionBufferSize, repartitionBufferSize = _) // number of accumulated records
-  var perRecordTimeoutMillis: Int = prop(1000 * 60 * 60)(perRecordTimeoutMillis, perRecordTimeoutMillis = _) // 1 hour
+  var zstdInitTimeoutMillis: Int = prop(1000 * 60 * 60)(zstdInitTimeoutMillis, zstdInitTimeoutMillis = _) // 1 hour
+  var perMbTimeoutMillis: Int = prop(1000 * 60)(perMbTimeoutMillis, perMbTimeoutMillis = _) // 1 minutes
+  var perRecordAttempts: Int = prop(5)(perRecordAttempts, perRecordAttempts = _)
 
   type WarcAccessor = (WarcRecord => Any) => Any
 
@@ -87,8 +90,8 @@ object WarcProcessor {
     val warcErrPath = new Path(destPath, warcName + WarcExt + CdxExt + ErrLogExt).toString
     val arcErrPath = new Path(destPath, arcName + ArcExt + CdxExt + ErrLogExt).toString
 
-    val warcComplete = HdfsIO.exists(warcPath) && !HdfsIO.exists(warcCdxPath)
-    val arcComplete = HdfsIO.exists(arcPath) && !HdfsIO.exists(arcCdxPath)
+    val warcComplete = HdfsIO.exists(warcPath) && (HdfsIO.exists(warcCdxPath) || !generateCdx)
+    val arcComplete = HdfsIO.exists(arcPath) && (HdfsIO.exists(arcCdxPath) || !generateCdx)
 
     if (warcComplete && arcComplete) 0L
     else {
@@ -127,31 +130,38 @@ object WarcProcessor {
           else {
             val length = record.compressedSize
             val status = "Copying " + location + ":" + offset + "+" + length + "..."
-            Common.timeout(perRecordTimeoutMillis, Some(status)) {
-              Log.debug(status)
-              if (isArc) {
-                request(location, offset, length)(IOUtil.copy(_, arcOut.get))
-                if (generateCdx) arcCdxOut.get.println(record.toCdxString(Seq(arcPosition.toString, arcFile)))
-                arcPosition += length
-              } else {
-                if (location.toLowerCase.endsWith(ZstdExt)) {
-                  Zstd.ifInit(location, close = true) {
-                    val r = request(location, 0, -1)
-                    new CleanupInputStream(r.get, () => r.clear(false))
-                  }
-                  val compressedSize = Gzip.countCompressOut(warcOut.get) { compressOut =>
-                    request(location, offset, length)(in => IOUtil.copy(Zstd.decompress(in), compressOut))
-                  }
-                  if (generateCdx) warcCdxOut.get.println(record.copy(compressedSize = compressedSize).toCdxString(Seq(warcPosition.toString, warcFile)))
-                  warcPosition += compressedSize
-                } else {
-                  request(location, offset, length)(IOUtil.copy(_, warcOut.get))
-                  if (generateCdx) warcCdxOut.get.println(record.toCdxString(Seq(warcPosition.toString, warcFile)))
-                  warcPosition += length
+            val isZstd = !isArc && location.toLowerCase.endsWith(ZstdExt)
+            if (isZstd) {
+              Common.timeout(zstdInitTimeoutMillis, Some(status)) {
+                Zstd.ifInit(location, close = true) {
+                  val r = request(location, 0, -1)
+                  new CleanupInputStream(r.get, () => r.clear(false))
                 }
               }
-              Log.debug("Copying " + location + ":" + offset + ":" + length + " - done.")
-              1L
+            }
+            Common.retry(perRecordAttempts, log = (attempt, _) => status + " (attempt " + attempt + ")") { _ =>
+              Common.timeout(perMbTimeoutMillis * (length.toDouble / 1.mb).ceil.toInt, Some(status)) {
+                Log.debug(status)
+                if (isArc) {
+                  request(location, offset, length)(IOUtil.copy(_, arcOut.get))
+                  if (generateCdx) arcCdxOut.get.println(record.toCdxString(Seq(arcPosition.toString, arcFile)))
+                  arcPosition += length
+                } else {
+                  if (isZstd) {
+                    val compressedSize = Gzip.countCompressOut(warcOut.get) { compressOut =>
+                      request(location, offset, length)(in => IOUtil.copy(Zstd.decompress(in), compressOut))
+                    }
+                    if (generateCdx) warcCdxOut.get.println(record.copy(compressedSize = compressedSize).toCdxString(Seq(warcPosition.toString, warcFile)))
+                    warcPosition += compressedSize
+                  } else {
+                    request(location, offset, length)(IOUtil.copy(_, warcOut.get))
+                    if (generateCdx) warcCdxOut.get.println(record.toCdxString(Seq(warcPosition.toString, warcFile)))
+                    warcPosition += length
+                  }
+                }
+                Log.debug("Copying " + location + ":" + offset + ":" + length + " - done.")
+                1L
+              }
             }
           }
         } catch {
@@ -177,7 +187,7 @@ object WarcProcessor {
   }
 
   def runByCdx[R: ClassTag](records: RDD[CdxRecord], open: CdxRecord => WarcAccessor)(action: WarcRecord => Option[R]): RDD[R] = {
-    initPartitions(records).flatMap { record => Common.timeout(perRecordTimeoutMillis) { open(record) { warc => action(warc) }.asInstanceOf[Option[R]] } }
+    initPartitions(records).flatMap { record => Common.timeout(perMbTimeoutMillis) { open(record) { warc => action(warc) }.asInstanceOf[Option[R]] } }
   }
 
   def run[R: ClassTag](path: String)(action: WarcRecord => TraversableOnce[R]): RDD[R] = runByFile(path) { (_, records) => records.flatMap(action) }

@@ -137,13 +137,15 @@ class HdfsIO private (val fs: FileSystem) {
   }
 
   def copyFromLocal(src: String, dst: String, move: Boolean = false, overwrite: Boolean = false, replication: Short = 0): Unit = {
-    val dstTmpPath = new Path(dst + "._copying")
-    if (overwrite) delete(dst)
     val dstPath = new Path(dst)
+    val exists = fs.exists(dstPath)
+    if (exists && !overwrite) throw new FileAlreadyExistsException(dst)
+    val dstTmpPath = new Path(dst + "._copying")
     val dstReplication = if (replication == 0) if (defaultReplication == 0) fs.getDefaultReplication(dstPath) else defaultReplication else replication
     val conf = new org.apache.hadoop.conf.Configuration(SparkHadoopUtil.get.conf)
     conf.setInt(HdfsIO.ReplicationProperty, 1)
     FileUtil.copy(FileSystem.getLocal(conf), new Path(src), fs, dstTmpPath, move, true, conf)
+    if (exists && overwrite) delete(dst)
     fs.rename(dstTmpPath, dstPath)
     if (dstReplication > 1) fs.setReplication(dstPath, dstReplication)
   }

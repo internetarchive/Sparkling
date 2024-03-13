@@ -1,10 +1,11 @@
 package org.archive.webservices.sparkling.io
 
 import com.amazonaws.auth.{AWSCredentials, AWSCredentialsProvider, AnonymousAWSCredentials, BasicAWSCredentials}
-import com.amazonaws.services.s3.model.ObjectMetadata
+import com.amazonaws.services.s3.model.{ListObjectsRequest, ObjectMetadata}
 import com.amazonaws.services.s3.transfer.{TransferManager, Upload}
 import com.amazonaws.services.s3.{AmazonS3Client, S3ClientOptions}
 import com.amazonaws.{AmazonServiceException, ClientConfiguration}
+import scala.collection.convert.ImplicitConversions._
 
 import java.io._
 
@@ -85,6 +86,12 @@ class S3Client(val s3: AmazonS3Client) {
       for (line <- lines) out.println(line)
     }
   }
+
+  def list(bucket: String, path: String): Set[String] = {
+    val listObjectsRequest = new ListObjectsRequest().withBucketName(bucket).withPrefix(path.stripSuffix("/") + "/").withDelimiter("/")
+    val listing = s3.listObjects(listObjectsRequest)
+    listing.getObjectSummaries.map(_.getKey) ++ listing.getCommonPrefixes
+  }.toSet
 
   def exists(bucket: String, dstPath: String): Boolean = meta(bucket, dstPath).isDefined
 

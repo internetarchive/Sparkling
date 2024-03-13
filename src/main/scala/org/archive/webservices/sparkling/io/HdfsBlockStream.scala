@@ -52,20 +52,15 @@ class HdfsBlockStream(fs: FileSystem, file: String, offset: Long = 0, length: Lo
         try {
           Common.timeoutWithReporter(blockReadTimeoutMillis) { reporter =>
             reporter.alive("Reading " + path + " (Offset: " + pos + ")")
-            if (pos > 0) {
-              if (Try {
-                in.seek(pos)
+            if (Try {
+              if (pos > 0) in.seek(pos)
+              readBlock(reporter, in)
+            }.isFailure) {
+              if (!Try(in.seekToNewSource(pos) && readBlock(reporter, in)).getOrElse(false)) {
+                if (pos > 0) in.seek(pos)
                 readBlock(reporter, in)
-              }.isFailure) {
-                val retryNewSource = Try {
-                  in.seekToNewSource(pos) && readBlock(reporter, in)
-                }.getOrElse(false)
-                if (!retryNewSource) {
-                  in.seek(pos)
-                  readBlock(reporter, in)
-                }
               }
-            } else readBlock(reporter, in)
+            }
           }
         } finally {
           in.close()
