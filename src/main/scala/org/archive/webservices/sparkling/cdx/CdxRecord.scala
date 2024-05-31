@@ -12,7 +12,7 @@ object CdxRecord {
     val (url, timestamp, fullUrl, mimeType, statusStr, checksum, redirectUrl, meta, conpressedSizeStr) =
       if (split.length == 7) {
         (split(0), split(1), split(2), split(3), split(4), split(5), "-", "-", split(6)) // CDX server
-      } else { (split(0), split(1), split(2), split(3), split(4), split(5), split(6), split(7), split(8)) }
+      } else (split(0), split(1), split(2), split(3), split(4), split(5), split(6), split(7), split(8))
     try {
       val status = Try(statusStr.toInt).getOrElse(-1)
       Some(CdxRecord(
@@ -59,5 +59,10 @@ case class CdxRecord(
 
   def toCdxString: String = toCdxString()
 
-  def locationFromAdditionalFields: (String, Long) = (additionalFields.drop(1).mkString(" "), additionalFields.head.toLong)
+  def locationFromAdditionalFields: (String, Long) = {
+    val (offset, offsetIdx) = additionalFields.zipWithIndex.reverse.drop(1).flatMap { case (field, i) =>
+      Try(field.toLong).toOption.map((_, i))
+    }.head
+    (additionalFields.drop(offsetIdx + 1).mkString(" "), offset)
+  }
 }

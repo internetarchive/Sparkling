@@ -31,6 +31,11 @@ object StringUtil {
     if (idx < 0) str else str.take(idx)
   }
 
+  def prefixToSeparator(str: String, separator: String): String = {
+    val idx = str.indexOf(separator)
+    if (idx < 0) str else str.take(idx) + separator
+  }
+
   def prependPrefix(str: String, prependSeparator: String, prependLength: Int, prefixSeparator: String): String = stripPrefixBySeparator(str, prependSeparator).take(prependLength) +
     prefixBySeparator(str, prefixSeparator)
 
@@ -67,6 +72,20 @@ object StringUtil {
     var s = str
     for ((open, close) <- brackets) s = stripBracket(s, open, close)
     s
+  }
+
+  def splitAtLast(str: String, separator: String): (String, String) = {
+    val idx = str.lastIndexOf(separator)
+    if (idx < 0) (str, "") else (str.take(idx), str.drop(idx + 1))
+  }
+
+  def splitAtFirst(str: String, separator: String): (String, String) = {
+    val idx = str.indexOf(separator)
+    if (idx < 0) (str, "") else (str.take(idx), str.drop(idx + 1))
+  }
+
+  def splitAt(str: String, separator: String): (String, String) = {
+    splitAtFirst(str, separator)
   }
 
   def padRight(str: String, length: Int, char: Character): String = str.padTo(length, char).mkString

@@ -247,8 +247,17 @@ object IteratorUtil {
   def count(iter: TraversableOnce[_]): Long = iter.map(_ => 1L).sum
 
   def drop[A](iter: Iterator[A], n: Long): Iterator[A] = {
-    for (i <- 1L to n) if (iter.hasNext) iter.next()
+    skip(iter, n)
     iter
+  }
+
+  def skip(iter: Iterator[_], n: Long): Long = {
+    var skipped = 0L
+    for (_ <- 1L to n if iter.hasNext) {
+      skipped += 1
+      iter.next()
+    }
+    skipped
   }
 
   def take[A](iter: Iterator[A], n: Long): Iterator[A] = whileDefined((1L to n).toIterator.map { _ => if (iter.hasNext) Some(iter.next()) else None })

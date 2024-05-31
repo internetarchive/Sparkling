@@ -39,7 +39,7 @@ class WarcRecord(val versionStr: String, val headers: Seq[(String, String)], val
 //  lazy val isHttp: Boolean = contentType.contains("application/http") // found a number of records with mime types, such as text/html, in content-type header
   lazy val http: Option[HttpMessage] = HttpMessage.get(payload) //if (isHttp) HttpMessage.get(payload) else None
 
-  def digestPayload(hash: InputStream => String = defaultDigestHash): Option[String] = http.map(_.payload).orElse(Some(payload)).map(hash)
+  def digestPayload(hash: InputStream => String = defaultDigestHash): String = hash(http.map(_.payload).getOrElse(payload))
 
   def toCdx(
       compressedSize: Long,
@@ -51,7 +51,7 @@ class WarcRecord(val versionStr: String, val headers: Seq[(String, String)], val
       val mime = if (isResponse) http.flatMap(_.mime).getOrElse("-") else warcType.map("warc/" + _).getOrElse("-")
       val status = http.map(_.status).getOrElse(-1)
       val redirectUrl = http.flatMap(_.redirectLocation).getOrElse("-")
-      CdxRecord(surt, timestamp.getOrElse("-"), url.getOrElse("-"), mime, status, digestPayload(digest).getOrElse("-"), redirectUrl, "-", compressedSize)
+      CdxRecord(surt, timestamp.getOrElse("-"), url.getOrElse("-"), mime, status, digestPayload(digest), redirectUrl, "-", compressedSize)
     }
     else None
   }

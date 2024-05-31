@@ -24,7 +24,7 @@ object CdxServerIndex {
       cache: Boolean = false,
       shuffle: Boolean = true,
       indexLinesPerPartition: Int = -1
-  ): RDD[CdxRecord] = {
+  )(implicit accessContext: AccessContext = AccessContext.default): RDD[CdxRecord] = {
     PrefixIndexLoader.loadTextLinesFromIndex(
       new Path(indexDirPath, "part-*-idx").toString,
       prefixes,
@@ -54,7 +54,7 @@ object CdxServerIndex {
       cache: Boolean = false,
       shuffle: Boolean = true,
       indexLinesPerPartition: Int = -1
-  ): RDD[(String, Iterator[CdxRecord])] = {
+  )(implicit accessContext: AccessContext = AccessContext.default): RDD[(String, Iterator[CdxRecord])] = {
     PrefixIndexLoader.loadTextLinesGroupedByPrefixFromIndex(
       new Path(indexDirPath, "part-*-idx").toString,
       prefixes,
@@ -79,14 +79,14 @@ object CdxServerIndex {
       cdxPath: String,
       getPrefix: String => Option[String] = line => Some(StringUtil.prefixBySeparator(line, " ")),
       filter: (String, Iterator[String]) => Iterator[String] = (prefix, records) => records
-  ): RDD[(String, Iterator[CdxRecord])] = { RddUtil.loadTextLinesGroupedAcrossFiles(cdxPath, getPrefix).map { case (group, records) => group -> filter(group, records).flatMap(CdxRecord.fromString) } }
+  )(implicit accessContext: AccessContext = AccessContext.default): RDD[(String, Iterator[CdxRecord])] = { RddUtil.loadTextLinesGroupedAcrossFiles(cdxPath, getPrefix).map { case (group, records) => group -> filter(group, records).flatMap(CdxRecord.fromString) } }
 
-  def lookupGrouped[A](indexDirPath: String, lookupSorted: RDD[A])(surt: A => String): RDD[(String, Iterator[A], Iterator[CdxRecord])] = {
+  def lookupGrouped[A](indexDirPath: String, lookupSorted: RDD[A])(surt: A => String)(implicit accessContext: AccessContext = AccessContext.default): RDD[(String, Iterator[A], Iterator[CdxRecord])] = {
     val grouped = RddUtil.groupSorted(lookupSorted, surt)
     lookup(indexDirPath, grouped)(_._1).map { case (s, (_, a), cdx) => (s, a, cdx) }
   }
 
-  def lookup[A](indexDirPath: String, lookupSorted: RDD[A])(surt: A => String): RDD[(String, A, Iterator[CdxRecord])] = {
+  def lookup[A](indexDirPath: String, lookupSorted: RDD[A])(surt: A => String)(implicit accessContext: AccessContext = AccessContext.default): RDD[(String, A, Iterator[CdxRecord])] = {
     val blockSize = HdfsIO.fs.getDefaultBlockSize(new Path(indexDirPath))
     val files = HdfsIO.files(new Path(indexDirPath, "part-*.gz").toString).map(_.split('/').last).toSeq.sorted
     val filesBc = sc.broadcast(files)
@@ -156,7 +156,7 @@ object CdxServerIndex {
     }
   }
 
-  def primitiveHdfsBackedStrMap(indexDirPath: String): HdfsIndexBackedMap = {
+  def primitiveHdfsBackedStrMap(indexDirPath: String)(implicit accessContext: AccessContext = AccessContext.default): HdfsIndexBackedMap = {
     new HdfsIndexBackedMap(new Path(indexDirPath, "part-*.gz").toString, StringUtil.prefixBySeparator(_, " "), { case (file, key) =>
       val indexFile = file.stripSuffix(".gz") + "-idx"
       HdfsIO.iterLines(indexFile).iter { iter =>
@@ -169,15 +169,15 @@ object CdxServerIndex {
     })
   }
 
-  def hdfsBackedStrMap(indexDirPath: String): HdfsBackedMap[String] = {
+  def hdfsBackedStrMap(indexDirPath: String)(implicit accessContext: AccessContext = AccessContext.default): HdfsBackedMap[String] = {
     new HdfsBackedMap[String](primitiveHdfsBackedStrMap(indexDirPath), identity)
   }
 
-  def hdfsBackedMap(indexDirPath: String): HdfsBackedMap[CdxRecord] = {
+  def hdfsBackedMap(indexDirPath: String)(implicit accessContext: AccessContext = AccessContext.default): HdfsBackedMap[CdxRecord] = {
     new HdfsBackedMap[CdxRecord](primitiveHdfsBackedStrMap(indexDirPath), str => CdxRecord.fromString(str).get)
   }
 
-  def loadRandomSampleStr(indexDirPath: String, num: Int, fromWhile: Option[(String, String => Boolean)] = None, filter: Option[String => Boolean] = None, spread: Int = 5): RDD[String] = {
+  def loadRandomSampleStr(indexDirPath: String, num: Int, fromWhile: Option[(String, String => Boolean)] = None, filter: Option[String => Boolean] = None, spread: Int = 5)(implicit accessContext: AccessContext = AccessContext.default): RDD[String] = {
     val indexRdd = RddUtil.loadTextFiles(indexDirPath + "/part-*-idx")
     val indexLines = if (fromWhile.isDefined) {
       val (from, whileCond) = fromWhile.get
@@ -235,11 +235,11 @@ object CdxServerIndex {
     }
   }
 
-  def loadPartitions(indexDirPath: String, numPartitions: Int, fromWhile: Option[(String, String => Boolean)] = None, surtPrefix: String => String = identity): RDD[(String, Iterator[CdxRecord])] = {
+  def loadPartitions(indexDirPath: String, numPartitions: Int, fromWhile: Option[(String, String => Boolean)] = None, surtPrefix: String => String = identity)(implicit accessContext: AccessContext = AccessContext.default): RDD[(String, Iterator[CdxRecord])] = {
     loadStrPartitions(indexDirPath, numPartitions, fromWhile, surtPrefix).map { case (p, str) => (p, str.flatMap(CdxRecord.fromString)) }
   }
 
-  def loadStrPartitions(indexDirPath: String, numPartitions: Int, fromWhile: Option[(String, String => Boolean)] = None, surtPrefix: String => String = identity): RDD[(String, Iterator[String])] = {
+  def loadStrPartitions(indexDirPath: String, numPartitions: Int, fromWhile: Option[(String, String => Boolean)] = None, surtPrefix: String => String = identity)(implicit accessContext: AccessContext = AccessContext.default): RDD[(String, Iterator[String])] = {
     val files = RddUtil.loadTextFiles(indexDirPath + "/part-*-idx").map { case (file, lines) =>
       val (beginning, relevant) = if (fromWhile.isDefined) {
         val (from, whileCond) = fromWhile.get

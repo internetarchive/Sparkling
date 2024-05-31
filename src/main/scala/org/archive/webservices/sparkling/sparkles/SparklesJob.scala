@@ -42,9 +42,12 @@ object SparklesJob {
 
   def init[I: ClassTag](inputLabel: Option[String], in: => I): SparklesJob[I, I] = new SparklesJob[I, I] {
     override def printLabel: Option[String] = inputLabel
-    lazy val input: I = in
+    def input: I = in
     def process(iter: Int, input: I, print: Boolean): I = input
-    override def get: I = lastOut.getOrElse(input)
+    override def get: I = {
+      if (lastOut.isEmpty) lastOut = Some(input)
+      super.get
+    }
   }
 
   def apply[I: ClassTag](inputLabel: String)(in: => I): SparklesJob[I, I] = init(Some(inputLabel), in)

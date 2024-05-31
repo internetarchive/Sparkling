@@ -1,13 +1,14 @@
 package org.archive.webservices.sparkling.indexed
 
-import java.io.InputStream
 import org.apache.hadoop.fs.Path
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
+import org.archive.webservices.sparkling.AccessContext
 import org.archive.webservices.sparkling.io.{HdfsIO, IOUtil}
 import org.archive.webservices.sparkling.util.{CleanupIterator, IteratorUtil, MultiBufferedIterator, RddUtil}
 
+import java.io.{InputStream, Serializable}
 import scala.reflect.ClassTag
 import scala.util.Try
 
@@ -34,10 +35,10 @@ object PrefixIndexLoader {
       sorted: Boolean = false,
       cache: Boolean = true,
       linesPerPartition: Int = -1
-  ): RDD[RecordPointer] = {
+  )(implicit accessContext: AccessContext = AccessContext.default): RDD[RecordPointer] = {
     val rdd = (if (linesPerPartition > 0) { RddUtil.loadTextPartitionsByLinesWithFilenames(path, linesPerPartition = linesPerPartition) }
                else { RddUtil.loadBinary(path, decompress = false, close = false, sorted = sorted) { (indexFile, in) => Iterator((indexFile, IteratorUtil.cleanup(IOUtil.lines(in), in.close))) } })
-      .flatMap { case (indexFile, lines) =>
+      .coalesce(parallelism).flatMap { case (indexFile, lines) =>
         lines.chain { l =>
           val pointers = IndexUtil.lineCandidates(l, prefixBroadcast.value).flatMap { case (line, prefixStart) =>
             Try {
@@ -52,18 +53,18 @@ object PrefixIndexLoader {
     if (cache) rdd.persist(StorageLevel.MEMORY_AND_DISK) else rdd
   }
 
-  def loadIndex(path: String, prefixes: SortedPrefixSeq, getFileOffsetLength: String => (String, Long, Long), mergePointers: Int): RDD[RecordPointer] = {
-    loadIndex(path, prefixes, getFileOffsetLength, if (mergePointers == 0) DefaultMergePointers else mergePointers, HdfsIO.fs.getDefaultBlockSize(new Path(path)))
+  def loadIndex(path: String, prefixes: SortedPrefixSeq, getFileOffsetLength: String => (String, Long, Long), mergePointers: Int, sorted: Boolean = false)(implicit accessContext: AccessContext = AccessContext.default): RDD[RecordPointer] = {
+    loadIndex(path, prefixes, getFileOffsetLength, if (mergePointers == 0) DefaultMergePointers else mergePointers, HdfsIO.fs.getDefaultBlockSize(new Path(path)), sorted)
   }
 
   def loadIndex(
       path: String,
       prefixes: SortedPrefixSeq,
       getFileOffsetLength: String => (String, Long, Long),
-      mergePointers: Int = DefaultMergePointers,
-      mergeTolerance: Long = 0,
-      sorted: Boolean = false
-  ): RDD[RecordPointer] = { loadIndexWithPrefixesBroadcast(path, sc.broadcast(prefixes), getFileOffsetLength, mergePointers, mergeTolerance) }
+      mergePointers: Int,
+      mergeTolerance: Long,
+      sorted: Boolean
+  )(implicit accessContext: AccessContext): RDD[RecordPointer] = { loadIndexWithPrefixesBroadcast(path, sc.broadcast(prefixes), getFileOffsetLength, mergePointers, mergeTolerance, sorted) }
 
   def loadTextLinesFromIndex(
       indexPath: String,
@@ -76,7 +77,7 @@ object PrefixIndexLoader {
       cache: Boolean = false,
       shuffle: Boolean = true,
       indexLinesPerPartition: Int = -1
-  ): RDD[String] = {
+  )(implicit accessContext: AccessContext = AccessContext.default): RDD[String] = {
     val prefixBroadcast = sc.broadcast(prefixes)
     val index = loadIndexWithPrefixesBroadcast(
       indexPath,
@@ -109,7 +110,7 @@ object PrefixIndexLoader {
       getOffsetLength: String => (Long, Long),
       load: Iterator[InputStream] => Iterator[D],
       sorted: Boolean = false
-  ): RDD[D] = { loadBinaryWithPrefixBroadcast(path, sc.broadcast(prefixes), getIndexPath, getOffsetLength, load, sorted = sorted) }
+  )(implicit accessContext: AccessContext = AccessContext.default): RDD[D] = { loadBinaryWithPrefixBroadcast(path, sc.broadcast(prefixes), getIndexPath, getOffsetLength, load, sorted = sorted) }
 
   def loadBinaryWithPrefixBroadcast[D: ClassTag](
       path: String,
@@ -118,7 +119,7 @@ object PrefixIndexLoader {
       getOffsetLength: String => (Long, Long),
       load: Iterator[InputStream] => Iterator[D],
       sorted: Boolean = false
-  ): RDD[D] = {
+  )(implicit accessContext: AccessContext = AccessContext.default): RDD[D] = {
     RddUtil.loadBinary(path, decompress = false, close = false, sorted = sorted) { (file, in) =>
       val indexPath = getIndexPath(file)
       val splitStreams = IndexUtil.splitStream(in, HdfsIO.lines(indexPath), prefixBroadcast.value, getOffsetLength)
@@ -136,7 +137,7 @@ object PrefixIndexLoader {
       getOffsetLength: String => (Long, Long),
       filter: String => Boolean = _ => true,
       sorted: Boolean = false
-  ): RDD[String] = {
+  )(implicit accessContext: AccessContext = AccessContext.default): RDD[String] = {
     val prefixBroadcast = sc.broadcast(prefixes)
     loadBinaryWithPrefixBroadcast(
       path,
@@ -171,8 +172,8 @@ object PrefixIndexLoader {
       dataPath: Option[String] = None,
       shuffle: Boolean = true,
       indexLinesPerPartition: Int = -1
-  ): RDD[(String, Iterator[String])] = {
-    def groupKey(prefix: String, line: String): String = Try(getPrefix(prefix, line)).getOrElse(line)
+  )(implicit accessContext: AccessContext = AccessContext.default): RDD[(String, Iterator[String])] = {
+    def groupKey(prefix: String, line: String)(implicit accessContext: AccessContext = AccessContext.default): String = Try(getPrefix(prefix, line)).getOrElse(line)
 
     val prefixBroadcast = sc.broadcast(prefixes)
     val index = loadIndexWithPrefixesBroadcast(

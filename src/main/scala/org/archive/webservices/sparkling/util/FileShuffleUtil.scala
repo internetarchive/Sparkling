@@ -10,7 +10,6 @@ import org.apache.spark.rdd.RDD
 import org.archive.webservices.sparkling.{Sparkling, _}
 import org.archive.webservices.sparkling.io.{HdfsIO, IOUtil, NonClosingOutputStream, TypedInOut}
 import org.archive.webservices.sparkling.logging.{Log, LogContext}
-import org.archive.webservices.sparkling.util.RddUtil.lazyMapPartitions
 
 import scala.reflect.ClassTag
 
@@ -127,7 +126,7 @@ object FileShuffleUtil {
   def sortWithinPartitions[A: ClassTag: TypedInOut, S: ClassTag: Ordering](rdd: RDD[A])(length: A => Long, sortBy: A => S): RDD[A] = {
     val ordering = implicitly[Ordering[S]]
     val inout = implicitly[TypedInOut[A]]
-    lazyMapPartitions(rdd) { (_, records) =>
+    RddUtil.lazyMapPartitions(rdd) { (_, records) =>
       var writtenChunks = 0L
       var writtenLines = 0L
       val chunks = Common.timeoutWithReporter(taskTimeoutMillis) { reporter =>

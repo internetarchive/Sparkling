@@ -7,6 +7,8 @@ import org.archive.url.WaybackURLKeyMaker
 import scala.util.Try
 
 object SurtUtil {
+  val DefaultPorts = Set(80, 443)
+
   private lazy val keyMaker = new WaybackURLKeyMaker()
   private lazy val validHostPattern = "[a-z]+\\,[\\p{L}\\p{M}0-9\\-\\,]+".r
 
@@ -35,25 +37,20 @@ object SurtUtil {
     if (site.isEmpty) Set.empty
     else {
       val pathOpt = hostPath.drop(1).headOption.map(_.trim.stripPrefix("/").stripSuffix("/")).filter(_.nonEmpty)
-      if (site.contains(":")) {
-        pathOpt match {
-          case Some(path) => Set(site + ")/" + path + " ") ++ {
+      val hasPort = site.contains(":")
+      val ports = Set("") ++ (if (hasPort) Set.empty else DefaultPorts.map(":" + _))
+      pathOpt match {
+        case Some(path) =>
+          ports.flatMap { p =>
+            Set(site + p + ")/" + path + " ") ++ {
               if (path.contains("?") || path.contains("#")) Set.empty
-              else { Set(site + ")/" + path + "?", site + ")/" + path + "#") ++ { if (subpaths) Set(site + ")/" + path + "/") else Set(site + ")/" + path + "/ ") } }
-            }
-          case None => Set(site + ")")
-        }
-      } else {
-        pathOpt match {
-          case Some(path) => Set(site + ")/" + path + " ", site + ":80)/" + path + " ") ++ {
-              if (path.contains("?") || path.contains("#")) Set.empty
-              else {
-                Set(site + ")/" + path + "?", site + ")/" + path + "#") ++ { if (subpaths) Set(site + ")/" + path + "/") else Set(site + ")/" + path + "/ ") } ++
-                  Set(site + ":80)/" + path + "?", site + ":80)/" + path + "#") ++ { if (subpaths) Set(site + ":80)/" + path + "/") else Set(site + ":80)/" + path + "/ ") }
+              else Set(site + p + ")/" + path + "?", site + p + ")/" + path + "#") ++ {
+                if (subpaths) Set(site + p + ")/" + path + "/") else Set(site + p + ")/" + path + "/ ")
               }
             }
-          case None => Set(site + ")", site + ":") ++ (if (subdomains) Set(site + ",") else Seq.empty)
-        }
+          }
+        case None =>
+          ports.map(site + _ + ")") ++ (if (subdomains && !hasPort) Set(site + ",") else Set.empty)
       }
     }
   }

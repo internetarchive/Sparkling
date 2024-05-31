@@ -1,17 +1,18 @@
 package org.archive.webservices.sparkling.io
 
-import java.io.{FileSystem => _, _}
-import java.net.URI
-import java.util.zip.GZIPOutputStream
 import org.apache.commons.io.input.BoundedInputStream
 import org.apache.hadoop.fs._
 import org.apache.spark.deploy.SparkHadoopUtil
+import org.archive.webservices.sparkling.AccessContext
 import org.archive.webservices.sparkling.logging.{Log, LogContext}
 import org.archive.webservices.sparkling.util.{CleanupIterator, Common, IteratorUtil}
 
+import java.io.{FileSystem => _, _}
+import java.net.URI
+import java.util.zip.GZIPOutputStream
 import scala.util.{Random, Try}
 
-object HdfsIO extends HdfsIO(FileSystem.get(SparkHadoopUtil.get.conf)) {
+object HdfsIO {
   import org.archive.webservices.sparkling.Sparkling._
 
   type LoadingStrategy = LoadingStrategy.Value
@@ -28,16 +29,25 @@ object HdfsIO extends HdfsIO(FileSystem.get(SparkHadoopUtil.get.conf)) {
   val ReplicationProperty = "dfs.replication"
   val BufferSizeProperty = "io.file.buffer.size"
 
-  def apply(fs: FileSystem): HdfsIO = new HdfsIO(fs)
-  def apply(host: String, port: Int): HdfsIO = apply(FileSystem.get(new URI("hdfs://" + host + ":" + port), SparkHadoopUtil.get.conf))
+  def apply(fs: FileSystem): HdfsIO = apply(fs.getUri.toString)
+  def apply(host: String, port: Int): HdfsIO = apply("hdfs://" + host + ":" + port)
+  def apply(uri: String): HdfsIO = new HdfsIO(uri)
+
+  lazy val default: HdfsIO = apply(FileSystem.get(SparkHadoopUtil.get.conf))
+
+  implicit def toInstance(self: this.type)(implicit context: AccessContext = AccessContext.default): HdfsIO = {
+    context.hdfsIO
+  }
 }
 
-class HdfsIO private (val fs: FileSystem) {
+class HdfsIO private (val uri: String) extends Serializable {
   import org.archive.webservices.sparkling.Sparkling._
 
-  implicit val logContext: LogContext = LogContext(this)
+  @transient lazy val fs: FileSystem = FileSystem.get(new URI(uri), SparkHadoopUtil.get.conf)
 
-  private lazy val localFiles = collection.mutable.Map.empty[String, String]
+  @transient implicit lazy val logContext: LogContext = LogContext(this)
+
+  @transient private lazy val localFiles = collection.mutable.Map.empty[String, String]
 
   def clearFileLocalCopy(path: String): Unit = localFiles.synchronized {
     for (localCopy <- localFiles.remove(path)) {

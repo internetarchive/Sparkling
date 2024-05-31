@@ -1,13 +1,12 @@
 package org.archive.webservices.sparkling.warc
 
 import java.io._
-
 import com.google.common.io.CountingInputStream
 import org.apache.hadoop.fs.Path
 import org.apache.spark.rdd.RDD
 import org.archive.webservices.sparkling.cdx.CdxRecord
 import org.archive.webservices.sparkling.compression.Gzip
-import org.archive.webservices.sparkling.io.{ByteArray, IOUtil, MemoryBufferInputStream}
+import org.archive.webservices.sparkling.io.{ByteArray, ChainedInputStream, IOUtil, MemoryBufferInputStream}
 import org.archive.webservices.sparkling.util.{IteratorUtil, RddUtil}
 
 import scala.util.Try
