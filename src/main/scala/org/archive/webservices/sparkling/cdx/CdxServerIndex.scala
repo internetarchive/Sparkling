@@ -243,14 +243,14 @@ object CdxServerIndex {
     val files = RddUtil.loadTextFiles(indexDirPath + "/part-*-idx").map { case (file, lines) =>
       val (beginning, relevant) = if (fromWhile.isDefined) {
         val (from, whileCond) = fromWhile.get
-        (lines.headOption.map(StringUtil.prefixBySeparator(_, " ")).exists(s => s >= from && whileCond(s)),
+        (lines.headOption.map(StringUtil.prefixBySeparator(_, " ")).exists(s => s >= from),
           lines.chain(_.dropWhile(_ < from).takeWhile(l => whileCond(StringUtil.prefixBySeparator(l, " ")))))
       } else (true, lines)
       (file, relevant.iter(IteratorUtil.count), beginning)
     }.sortBy(_._1).collect
     val totalLines = files.map(_._2).sum + (if (!files.head._3) 1 else 0)
     val linesPerPartition = (totalLines.toDouble / numPartitions).ceil.toLong
-    val prevFile = files.zipWithIndex.find{case ((_, lines, _), _) => lines > 0}.filter{case ((_, _, beginning), i) => i > 0 && beginning}.map{case (_, i) => files(i - 1)._1}
+    val prevFile = files.zipWithIndex.find{case ((_, lines, b), _) => lines > 0 || b}.filter{case ((_, _, beginning), i) => i > 0 && beginning}.map{case (_, i) => files(i - 1)._1}
     val partitions = files.flatMap { case (file, lines, beginning) =>
       if (lines > 0) {
         (0 until ((lines + (if (!beginning) 1 else 0)).toDouble / linesPerPartition).ceil.toInt).map((file, _))

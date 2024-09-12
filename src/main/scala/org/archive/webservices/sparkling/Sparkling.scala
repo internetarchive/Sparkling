@@ -75,7 +75,15 @@ object Sparkling {
   def loggingId: String = StringUtil.padNum(taskId, 5)
 
   private val _taskStore = CollectionUtil.concurrentMap[Long, mutable.Map[String, Any]]
-  def taskStore: mutable.Map[String, Any] = _taskStore.getOrElseUpdate(taskId, CollectionUtil.concurrentMap[String, Any])
+  def taskStore: mutable.Map[String, Any] = {
+    val key = taskId
+    _taskStore.getOrElseUpdate(key, {
+      for (context <- taskContext) context.addTaskCompletionListener { _ =>
+        _taskStore.remove(key)
+      }
+      CollectionUtil.concurrentMap[String, Any]
+    })
+  }
 
   private val _taskInFiles = CollectionUtil.concurrentMap[Long, (Int, String)]
   def setTaskInFile(idx: Int, filename: String): String = {
