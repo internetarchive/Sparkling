@@ -35,8 +35,9 @@ object WarcLoader {
 
   def load(in: InputStream): Iterator[WarcRecord] = {
     var current: Option[WarcRecord] = None
-    if (Gzip.isCompressed(in)) {
-      Gzip.decompressConcatenated(in).flatMap { s =>
+    val s = IOUtil.supportMark(in)
+    if (Gzip.isCompressed(s)) {
+      Gzip.decompressConcatenated(s).flatMap { s =>
         IteratorUtil.whileDefined {
           if (current.isDefined) current.get.close()
           current = Try(WarcRecord.next(s)).getOrElse(None)
@@ -46,7 +47,7 @@ object WarcLoader {
     } else {
       IteratorUtil.whileDefined {
         if (current.isDefined) current.get.close()
-        current = WarcRecord.next(in)
+        current = WarcRecord.next(s)
         current
       }
     }
