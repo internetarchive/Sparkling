@@ -50,6 +50,9 @@ object Sparkling {
     value
   }
 
+  private var _appId = ""
+  def appId: String = _appId
+
   var minOpenFiles: Int = prop(100)(minOpenFiles, minOpenFiles = _)
   var maxOpenFiles: Int = prop(300)(maxOpenFiles, maxOpenFiles = _)
   private lazy val _fileOutPool = new ThreadLocal[FileOutputPool]
@@ -153,7 +156,11 @@ object Sparkling {
 
   def initPartitions[A: ClassTag](rdd: RDD[A]): RDD[A] = {
     val props = broadcastProps
-    RddUtil.doPartitions(rdd)(_ => setProps(props))
+    val appId = sc.applicationId
+    RddUtil.doPartitions(rdd) { _ =>
+      Sparkling._appId = appId
+      setProps(props)
+    }
   }
 
   def setProps(props: Broadcast[List[SparklingDistributedProp]]): Unit = setProps(props.value)

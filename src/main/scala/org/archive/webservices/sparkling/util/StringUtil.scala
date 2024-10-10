@@ -166,16 +166,15 @@ object StringUtil {
   def readLine(in: InputStream, charset: String = DefaultCharset, maxLength: Int = 4096 * 1024, buffer: Int = 64 * 1024): String = { // maxLength = 4 MB
     val bytes = if (in.markSupported()) {
       if (IOUtil.eof(in)) return null
-      val bufferLength = buffer.min(maxLength)
-      val b = Array.ofDim[Byte](bufferLength)
+      val b = Array.ofDim[Byte](buffer)
       Iterator.continually {
-        in.mark(bufferLength)
+        in.mark(buffer)
         val read = in.read(b)
         if (read < 0) Iterator(None)
         else {
           val newLineIdx = b.indexOf(NewLineByte)
           if (newLineIdx < 0 || newLineIdx >= read) Iterator(Some {
-            if (read < bufferLength) b.take(read) else b
+            if (read < buffer) b.take(read) else b
           }) else {
             val tail = b.take(newLineIdx)
             in.reset()

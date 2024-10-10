@@ -1,9 +1,9 @@
 package org.archive.webservices.sparkling.util
 
 import java.util.concurrent.{TimeUnit, TimeoutException}
-
 import org.archive.webservices.sparkling.logging.{Log, LogContext}
 
+import java.io.File
 import scala.util.Try
 
 object Common {
@@ -159,4 +159,16 @@ object Common {
   }
 
   def tryOpt[A](a: => Option[A]): Option[A] = Try(a).toOption.flatten
+
+  def sync[R](file: String)(action: => R): R = sync(new File(file))(action)
+
+  def sync[R](file: File)(action: => R): R = {
+    while (!file.createNewFile()) Thread.`yield`()
+    file.deleteOnExit()
+    try {
+      action
+    } finally {
+      file.delete()
+    }
+  }
 }
