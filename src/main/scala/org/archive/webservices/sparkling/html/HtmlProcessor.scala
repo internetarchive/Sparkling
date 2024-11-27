@@ -17,7 +17,8 @@ object HtmlProcessor {
 
   val CodeTags: Set[String] = Set("script", "style")
   val EscapeTags: Set[String] = CodeTags ++ Set("textarea", "pre")
-  val TagOpenClosePattern: Regex = """<([ /]*)([^<> ]+)(>| [^<>]*>)""".r
+  val TagOpenClosePattern: Regex = """<([ /]*)([A-Za-z0-9_\-:!]+)([^>]*(>|$|\n))""".r
+  val InTagPattern: Regex = """['">]""".r
   val MaxHtmlStackDepthReachedMsg = "Max HTML stack depth reached."
 
   case class TagMatch(tag: String, name: String, opening: Boolean, closing: Boolean, attributes: String, text: String, stack: List[String]) {
@@ -48,14 +49,59 @@ object HtmlProcessor {
 
   def removeScripts(html: String): String = removeTags(html, "<script", "</script>")
 
+  def findTagEnd(remainingHtml: String): Option[String] = {
+    var remaining = remainingHtml
+    var m = InTagPattern.findFirstMatchIn(remaining)
+    if (m.isDefined) {
+      var tag = ""
+      while (m.isDefined) {
+        val matched = m.get.matched
+        val start = m.get.start
+        if (matched == "\"" || matched == "'") {
+          val to = remaining.indexOf(matched, start + 1)
+          val idx = if (to < 0) start else to
+          tag += remaining.take(idx + 1)
+          remaining = remaining.drop(idx + 1)
+          m = InTagPattern.findFirstMatchIn(remaining)
+        } else if (matched == ">") {
+          tag += remaining.take(start + 1)
+          m = None
+        }
+      }
+      Some(tag)
+    } else None
+  }
+
   def fastBodyText(html: String): String = {
     val lowerCase = StringUtil.toLowerCase(html)
     val headEnd = lowerCase.lastIndexOf("</head>")
     val bodyStart = if (headEnd < 0) lowerCase.indexOf("<body") else lowerCase.indexOf("<body", headEnd)
     if (bodyStart < 0) "" else {
-      val body = html.drop(bodyStart)
-      val bodyText = TagOpenClosePattern.replaceAllIn(removeScripts(body), "")
-      removeComments(bodyText)
+      var remaining = removeScripts(html.drop(bodyStart))
+      var inCode: Option[String] = None
+      removeComments {
+        IteratorUtil.whileDefined(TagOpenClosePattern.findFirstMatchIn(remaining)).map { tag =>
+          val slash = tag.group(1).trim
+          val name = tag.group(2).trim.toLowerCase
+          val opening = !slash.startsWith("/")
+          val (closing, tagEnd) = if (opening) {
+            val attributesStart = tag.start(3)
+            val remainingTag = findTagEnd(remaining.drop(attributesStart)).getOrElse(tag.group(3))
+            val tagEnd = attributesStart + remainingTag.length
+            val attributes = remainingTag.stripSuffix(">").trim
+            if (attributes.endsWith("/")) (true, tagEnd) else (false, tagEnd)
+          } else (!opening, tag.end)
+          val text = remaining.take(tag.start)
+          remaining = remaining.drop(tagEnd)
+          if (inCode.isDefined) {
+            if (!opening && closing && inCode.contains(name)) inCode = None
+            ""
+          } else {
+            if (opening && !closing && EscapeTags.contains(name)) inCode = Some(name)
+            text
+          }
+        }.mkString + remaining
+      }
     }
   }
 
@@ -85,21 +131,25 @@ object HtmlProcessor {
 
   def iterateTags(html: String): Iterator[TagMatch] = {
     (if (!strictMode) Some(html) else strictHtml(html)).map { strict =>
-      var pos = 0
       var stack = List.empty[String]
       var inCode: Option[String] = None
       val tags = collection.mutable.Map.empty[String, Int]
       var maxHtmlStackDepthReached = false
-      for (tag <- TagOpenClosePattern.findAllMatchIn(strict).takeWhile(_ => !maxHtmlStackDepthReached)) yield {
+      var remaining = strict
+      val matches = IteratorUtil.whileDefined(TagOpenClosePattern.findFirstMatchIn(remaining))
+      for (tag <- matches if !maxHtmlStackDepthReached) yield {
         if (maxHtmlStackDepthReached) None
         else {
           val slash = tag.group(1).trim
           val name = tag.group(2).trim.toLowerCase
           val opening = !slash.startsWith("/")
-          val (attributes, closing) = {
-            val attributes = tag.group(3).dropRight(1).trim
-            if (attributes.endsWith("/")) (attributes.dropRight(1), true) else (attributes, !opening)
-          }
+          val (attributes, closing, tagEnd) = if (opening && inCode.isEmpty) {
+            val attributesStart = tag.start(3)
+            val remainingTag = findTagEnd(remaining.drop(attributesStart)).getOrElse(tag.group(3))
+            val tagEnd = attributesStart + remainingTag.length
+            val attributes = remainingTag.stripSuffix(">").trim
+            if (attributes.endsWith("/")) (attributes.dropRight(1).trim, true, tagEnd) else (attributes, false, tagEnd)
+          } else ("", !opening, tag.end)
           if (inCode.isDefined && name == inCode.get && closing && !opening) inCode = None
           if (inCode.isEmpty) {
             if (!opening || !closing) {
@@ -122,10 +172,13 @@ object HtmlProcessor {
                 stack = stack.drop(1)
               }
             }
-            val text = strict.substring(pos, tag.start)
-            pos = tag.end
+            val text = remaining.take(tag.start)
+            remaining = remaining.drop(tagEnd)
             Some(TagMatch(tag.matched, name, opening, closing, attributes, removeComments(text), stack))
-          } else None
+          } else {
+            remaining = remaining.drop(tagEnd)
+            None
+          }
         }
       }
     }.getOrElse(Iterator.empty)

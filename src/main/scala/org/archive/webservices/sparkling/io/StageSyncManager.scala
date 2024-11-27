@@ -31,9 +31,9 @@ object StageSyncManager {
 
   def launchDetachableShell(proc: SystemProcess): Int = proc.synchronized {
     val tmpSesId = "bash" + Instant.now.toEpochMilli
-    proc.exec("tmux new-session -d -s " + tmpSesId + " '/bin/bash' \\; display-message -p -t " + tmpSesId + ":0 '#{pane_pid}'")
+    proc.exec("tmux -f /dev/null new-session -d -s " + tmpSesId + " '/bin/bash' \\; display-message -p -t " + tmpSesId + ":0 '#{pane_pid}'")
     val pid = proc.readAllInput().mkString.trim.toInt
-    proc.exec(s"kill -STOP $pid; reptyr -T $pid 2>/dev/null; kill -CONT $pid", supportsEcho = true, blocking = true)
+    proc.exec(s"kill -STOP $pid; reptyr -T $pid 2>/dev/null; kill -CONT $pid;", supportsEcho = true, blocking = true)
     pid
   }
 

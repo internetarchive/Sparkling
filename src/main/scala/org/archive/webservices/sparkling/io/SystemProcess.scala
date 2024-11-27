@@ -48,27 +48,31 @@ class SystemProcess private (
     readToLine(endLine, includeEnd = false)
   } else Iterator.empty
 
+  def readLine(
+      keepMaxBytes: Int = -1): String = synchronized {
+    val lineFuture = Future {
+      StringUtil.readLine(in, maxLength = keepMaxBytes)
+    }
+    while (!lineFuture.isCompleted || lastError.nonEmpty) {
+      if (lastError.nonEmpty) errorFuture.synchronized {
+        _onError(lastError)
+        lastError = Seq.empty
+      }
+      Thread.`yield`()
+    }
+    lineFuture.value.get.get
+  }
+
   def readToLine(
-                  endLine: String,
-                  prefix: Boolean = false,
-                  includeEnd: Boolean = true,
-                  keepMaxBytes: Int = -1): Iterator[String] = synchronized {
+      endLine: String,
+      prefix: Boolean = false,
+      includeEnd: Boolean = true,
+      keepMaxBytes: Int = -1): Iterator[String] = synchronized {
     var stop = false
     var remaining = keepMaxBytes
     IteratorUtil.whileDefined {
       if (!stop) {
-        val lineFuture = Future {
-          val length = if (keepMaxBytes < 0) -1 else if (remaining < 0) 0 else remaining
-          StringUtil.readLine(in, maxLength = length)
-        }
-        while (!lineFuture.isCompleted || lastError.nonEmpty) {
-          if (lastError.nonEmpty) errorFuture.synchronized {
-            _onError(lastError)
-            lastError = Seq.empty
-          }
-          Thread.`yield`()
-        }
-        val line = lineFuture.value.get.get
+        val line = readLine(if (keepMaxBytes < 0) -1 else if (remaining < 0) 0 else remaining)
         if (line == null) None
         else {
           stop = if (prefix) line.startsWith(endLine) else line == endLine

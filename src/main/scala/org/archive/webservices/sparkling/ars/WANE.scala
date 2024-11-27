@@ -88,7 +88,7 @@ object WANE {
     m.nonEmpty && !m.exists(_ < ' ')
   }
 
-  def entities(text: String, pipeline: StanfordCoreNLP = pipeline): Map[String, Set[String]] =
+  def entities(text: String, pipeline: StanfordCoreNLP = pipeline): Map[String, Set[String]] = {
     try {
       val doc = new CoreDocument(text)
       pipeline.annotate(doc)
@@ -100,5 +100,8 @@ object WANE {
     } catch {
       case _: Error     => Map.empty
       case _: Exception => Map.empty
+    } finally {
+      Runtime.getRuntime.gc()
     }
+  }
 }
