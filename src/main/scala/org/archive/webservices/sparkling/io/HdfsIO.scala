@@ -5,7 +5,7 @@ import org.apache.hadoop.fs._
 import org.apache.spark.deploy.SparkHadoopUtil
 import org.archive.webservices.sparkling.AccessContext
 import org.archive.webservices.sparkling.logging.{Log, LogContext}
-import org.archive.webservices.sparkling.util.{CleanupIterator, Common, IteratorUtil}
+import org.archive.webservices.sparkling.util.{CleanupIterator, CollectionUtil, Common, IteratorUtil}
 
 import java.io.{FileSystem => _, _}
 import java.net.URI
@@ -29,9 +29,17 @@ object HdfsIO {
   val ReplicationProperty = "dfs.replication"
   val BufferSizeProperty = "io.file.buffer.size"
 
+  private var fsCache = Map.empty[String, HdfsIO]
+
   def apply(fs: FileSystem): HdfsIO = apply(fs.getUri.toString)
   def apply(host: String, port: Int): HdfsIO = apply("hdfs://" + host + ":" + port)
-  def apply(uri: String): HdfsIO = new HdfsIO(uri)
+  def apply(uri: String): HdfsIO = fsCache.getOrElse(uri, synchronized {
+    fsCache.getOrElse(uri, {
+      val hdfsIO = new HdfsIO(uri)
+      fsCache = fsCache.updated(uri, hdfsIO)
+      hdfsIO
+    })
+  })
 
   lazy val default: HdfsIO = apply(FileSystem.get(SparkHadoopUtil.get.conf))
 

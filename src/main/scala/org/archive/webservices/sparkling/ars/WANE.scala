@@ -1,26 +1,25 @@
 package org.archive.webservices.sparkling.ars
 
 import java.util.Properties
-
 import edu.stanford.nlp.pipeline._
 import io.circe.syntax._
 import io.circe.{Json, parser}
 import org.archive.webservices.sparkling.html.HtmlProcessor
-import org.archive.webservices.sparkling.util.RegexUtil
+import org.archive.webservices.sparkling.util.{MemoryControl, RegexUtil}
 import org.archive.webservices.sparkling.warc.WarcRecord
 
 import scala.collection.JavaConverters._
 import scala.collection.immutable.ListMap
 
 object WANE {
-  lazy val pipeline: StanfordCoreNLP = {
-    val props = new Properties
-    props.setProperty("annotators", "tokenize,ssplit,ner")
-    props.setProperty("ner.useSUTime", "false")
-    props.setProperty("ner.applyNumericClassifiers", "false")
-    props.setProperty("ner.applyFineGrained", "false")
-    new StanfordCoreNLP(props)
+  val properties: Properties = new Properties() {
+    setProperty("annotators", "tokenize,ssplit,ner")
+    setProperty("ner.useSUTime", "false")
+    setProperty("ner.applyNumericClassifiers", "false")
+    setProperty("ner.applyFineGrained", "false")
   }
+
+  lazy val pipeline: StanfordCoreNLP = new StanfordCoreNLP(properties)
 
   lazy val fineGrainedPipeline: StanfordCoreNLP = {
     val props = new Properties
@@ -98,10 +97,8 @@ object WANE {
         }
       } else Map.empty
     } catch {
-      case _: Error     => Map.empty
+      case _: Error => Map.empty
       case _: Exception => Map.empty
-    } finally {
-      Runtime.getRuntime.gc()
     }
   }
 }

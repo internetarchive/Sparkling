@@ -163,7 +163,7 @@ object StringUtil {
   def fromInputStream(in: InputStream, codec: Codec): String = source(in, codec)(_.mkString)
 
   private val NewLineByte = '\n'.toByte
-  def readLine(in: InputStream, charset: String = DefaultCharset, maxLength: Int = 4096 * 1024, buffer: Int = 64 * 1024): String = { // maxLength = 4 MB
+  def readLineBytes(in: InputStream, maxLength: Int = 4096 * 1024, buffer: Int = 64 * 1024): Array[Byte] = { // maxLength = 4 MB
     val bytes = if (in.markSupported()) {
       if (IOUtil.eof(in)) return null
       val b = Array.ofDim[Byte](buffer)
@@ -189,9 +189,14 @@ object StringUtil {
       (Iterator(head) ++ Iterator.continually(in.read())).takeWhile(_ != -1).map(_.toByte).takeWhile(_ != NewLineByte)
     }
     val line = (if (maxLength < 0) bytes else bytes.take(maxLength)).toArray
-    val str = fromBytes(line, charset).stripSuffix("\r")
     IteratorUtil.consume(bytes)
-    str
+    line
+  }
+
+  def readLine(in: InputStream, charset: String = DefaultCharset, maxLength: Int = 4096 * 1024, buffer: Int = 64 * 1024): String = { // maxLength = 4 MB
+    val bytes = readLineBytes(in, maxLength, buffer)
+    if (bytes == null) return null
+    fromBytes(bytes, charset).stripSuffix("\r")
   }
 
   def formatNumber[A](number: A, decimal: Int = 0)(implicit numeric: Numeric[A]): String = {
@@ -202,6 +207,20 @@ object StringUtil {
     val intStr = int.toString.reverse.grouped(3).map(_.reverse.mkString).toList.reverse.mkString(",")
     val decString = if (decimal == 0) "" else "." + dec
     intStr + decString
+  }
+
+  def formatBytes(bytes: Long): String = {
+    val units = Seq("B", "KB", "MB", "GB", "TB", "PB")
+    if (bytes < 0) "0 " + units.head
+    else {
+      var unitIdx = 0
+      var b = bytes.toDouble
+      while (b > 1024 && unitIdx < units.length - 1) {
+        unitIdx += 1
+        b = b / 1024
+      }
+      StringUtil.formatNumber(b, 1) + " " + units(unitIdx)
+    }
   }
 
   def toLowerCase(str: String): String = str.map(_.toLower).mkString

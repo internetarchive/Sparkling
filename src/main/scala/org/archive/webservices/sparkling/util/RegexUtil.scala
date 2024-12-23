@@ -9,13 +9,18 @@ object RegexUtil {
 
   lazy val urlStartPattern: Regex = r("[a-z]+\\:.*")
   lazy val noWordCharacterPattern: Regex = r("[^\\p{L}\\p{M}]+")
-  lazy val newLineSpaceTabPattern: Regex = r("""[\n\r\t ]+""")
+  lazy val newLineSpaceTabPattern: Regex = r("\\s+")
   lazy val tokenDelimiterPattern: Regex = r("[^\\p{L}\\p{M}0-9]+")
+  lazy val nonLatinPattern: Regex = r("[^\\p{IsLatin}0-9\\s.,!?'\"()-]+")
 
   def matchesAbsoluteUrlStart(url: String): Boolean = urlStartPattern.pattern.matcher(url.toLowerCase).matches
   def oneValidWordCharacter(str: String): Boolean = str.nonEmpty && !noWordCharacterPattern.pattern.matcher(str).matches
   def oneLineSpaceTrim(str: String): String = newLineSpaceTabPattern.replaceAllIn(str, " ").trim
   def tokenize(str: String): Array[String] = tokenDelimiterPattern.replaceAllIn(str.toLowerCase, " ").trim.split(' ')
+  def filterLatin(str: String, stripSpaces: Boolean = true): String = {
+    val clean = nonLatinPattern.replaceAllIn(str, "").trim
+    if (stripSpaces) oneLineSpaceTrim(clean) else clean
+  }
 
   def split(str: String, pattern: String, limit: Int = -1): Seq[String] = {
     if (str.isEmpty) return Seq(str)

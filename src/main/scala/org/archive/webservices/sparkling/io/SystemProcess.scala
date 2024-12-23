@@ -1,36 +1,55 @@
 package org.archive.webservices.sparkling.io
 
-import org.archive.webservices.sparkling.util.{IteratorUtil, StringUtil}
+import org.archive.webservices.sparkling.logging.{Log, LogContext}
+import org.archive.webservices.sparkling.util.{ConcurrencyUtil, IteratorUtil, StringUtil}
 
-import java.io.{BufferedInputStream, BufferedReader, InputStreamReader, PrintStream}
+import java.io._
 import java.time.Instant
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.Future
 
 class SystemProcess private (
     val process: Process,
-    private var _supportsEcho: Boolean,
-    val in: BufferedInputStream,
-    val out: PrintStream,
-    private var _onError: Seq[String] => Unit = _ => {}) {
+    private var _supportsEcho: Boolean) {
+  implicit val logContext: LogContext = LogContext(this)
+
+  private val out: PrintStream = IOUtil.print(process.getOutputStream, autoFlush = true)
+  private val in: BufferedInputStream = new BufferedInputStream(process.getInputStream)
+
   private var _destroyed = false
 
-  private var lastError = Seq.empty[String]
+  private var _lastError = Seq.empty[String]
+  def lastError: Seq[String] = _lastError
 
-  private val errorFuture: Future[Boolean] = Future {
+  private val stderrFuture: Future[Boolean] = ConcurrencyUtil.future {
     val error = new BufferedReader(new InputStreamReader(process.getErrorStream))
     var line = error.readLine()
     while (line != null) {
-      errorFuture.synchronized(lastError :+= line)
+      Log.error(s"Error: $line")
+      _lastError :+= line
       line = error.readLine()
     }
     true
+  }
+
+  private var stdoutFuture: Option[Future[String]] = None
+  private def stdoutLine: Future[String] = stdoutFuture.getOrElse(nextStdout())
+  private def nextStdout(): Future[String] = synchronized {
+    val future = ConcurrencyUtil.future {
+      val line = StringUtil.readLine(in)
+      Log.info("> " + line)
+      line
+    }
+    stdoutFuture = Some(future)
+    future
   }
 
   def destroyed: Boolean = _destroyed
 
   def destroy(): Unit = synchronized {
     process.destroy()
+    in.close()
+    out.close()
     _destroyed = true
   }
 
@@ -48,18 +67,18 @@ class SystemProcess private (
     readToLine(endLine, includeEnd = false)
   } else Iterator.empty
 
-  def readLine(
+  private def readLine(
+      pipe: Option[InputStream] = None,
       keepMaxBytes: Int = -1): String = synchronized {
-    val lineFuture = Future {
-      StringUtil.readLine(in, maxLength = keepMaxBytes)
+    val lineFuture = pipe match {
+      case Some(p) => Future(StringUtil.readLine(p, maxLength = keepMaxBytes))
+      case None => stdoutLine
     }
-    while (!lineFuture.isCompleted || lastError.nonEmpty) {
-      if (lastError.nonEmpty) errorFuture.synchronized {
-        _onError(lastError)
-        lastError = Seq.empty
-      }
+    while (!lineFuture.isCompleted || (pipe.isDefined && stdoutLine.isCompleted)) {
+      if (pipe.isDefined && stdoutLine.isCompleted) nextStdout()
       Thread.`yield`()
     }
+    if (pipe.isEmpty) nextStdout()
     lineFuture.value.get.get
   }
 
@@ -67,12 +86,13 @@ class SystemProcess private (
       endLine: String,
       prefix: Boolean = false,
       includeEnd: Boolean = true,
-      keepMaxBytes: Int = -1): Iterator[String] = synchronized {
+      keepMaxBytes: Int = -1,
+      pipe: Option[InputStream] = None): Iterator[String] = synchronized {
     var stop = false
     var remaining = keepMaxBytes
     IteratorUtil.whileDefined {
       if (!stop) {
-        val line = readLine(if (keepMaxBytes < 0) -1 else if (remaining < 0) 0 else remaining)
+        val line = readLine(pipe, if (keepMaxBytes < 0) -1 else if (remaining < 0) 0 else remaining)
         if (line == null) None
         else {
           stop = if (prefix) line.startsWith(endLine) else line == endLine
@@ -90,30 +110,24 @@ class SystemProcess private (
     }.flatten
   }
 
-  def consumeToLine(endLine: String, prefix: Boolean = false): Unit = synchronized {
-    IteratorUtil.consume(readToLine(endLine, prefix))
+  def consumeToLine(endLine: String, prefix: Boolean = false, pipe: Option[InputStream] = None): Unit = synchronized {
+    IteratorUtil.consume(readToLine(endLine, prefix, pipe = pipe))
   }
 
   def exec(
-            cmd: String,
-            clearInput: Boolean = true,
-            blocking: Boolean = false,
-            supportsEcho: Boolean = _supportsEcho,
-            waitForLine: Option[String] = None,
-            waitForPrefix: Boolean = false,
-            onError: Option[Seq[String] => Unit] = None): Unit = synchronized {
+      cmd: String,
+      clearInput: Boolean = true,
+      blocking: Boolean = false,
+      supportsEcho: Boolean = _supportsEcho,
+      waitForLine: Option[String] = None,
+      waitForPrefix: Boolean = false,
+      pipe: Option[InputStream] = None): Unit = synchronized {
     if (clearInput) consumeAllInput()
-    for (func <- onError) {
-      val currentOnError = _onError
-      _onError = error => {
-        currentOnError(error)
-        func(error)
-      }
-    }
+    _lastError = Seq.empty
     out.println(cmd)
     _supportsEcho = supportsEcho
     if (blocking) consumeAllInput()
-    for (waitLine <- waitForLine) consumeToLine(waitLine, waitForPrefix)
+    for (waitLine <- waitForLine) consumeToLine(waitLine, waitForPrefix, pipe)
   }
 }
 
@@ -121,13 +135,12 @@ object SystemProcess {
   val CommandEndToken = "END"
 
   def apply(process: Process, supportsEcho: Boolean = false): SystemProcess = {
-    val in = new BufferedInputStream(process.getInputStream)
-    val out = IOUtil.print(process.getOutputStream, autoFlush = true)
-    new SystemProcess(process, supportsEcho, in, out)
+    new SystemProcess(process, supportsEcho)
   }
 
   def bash: SystemProcess = exec("/bin/bash", supportsEcho = true)
 
-  def exec(cmd: String, supportsEcho: Boolean = false): SystemProcess =
+  def exec(cmd: String, supportsEcho: Boolean = false): SystemProcess = {
     apply(Runtime.getRuntime.exec(cmd), supportsEcho)
+  }
 }

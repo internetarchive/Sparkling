@@ -19,6 +19,7 @@ object HtmlProcessor {
   val EscapeTags: Set[String] = CodeTags ++ Set("textarea", "pre")
   val TagOpenClosePattern: Regex = """<([ /]*)([A-Za-z0-9_\-:!]+)([^>]*(>|$|\n))""".r
   val InTagPattern: Regex = """['">]""".r
+  val CharsetHtmlPattern: Regex = "(encoding|charset)=[\\\" ]*([^\\\" ]+)".r
   val MaxHtmlStackDepthReachedMsg = "Max HTML stack depth reached."
 
   case class TagMatch(tag: String, name: String, opening: Boolean, closing: Boolean, attributes: String, text: String, stack: List[String]) {
@@ -106,20 +107,17 @@ object HtmlProcessor {
   }
 
   def readStream(in: InputStream, charsets: Seq[String] = Seq(Sparkling.DefaultCharset), maxLineLength: Int = 4096 * 1024): String = {
-    val pattern = "(encoding|charset)=[\\\" ]*([^\\\" ]+)".r
     var c = charsets
     var cSet = c.toSet
     IteratorUtil.whileDefined {
-      val head = in.read()
-      if (head == -1) None else Some {
-        val bytes = (Iterator(head) ++ Iterator.continually(in.read())).takeWhile(_ != -1).map(_.toByte).takeWhile(_.toChar != '\n')
-        val line = (if (maxLineLength < 0) bytes else bytes.take(maxLineLength)).toArray
+      val line = StringUtil.readLineBytes(in, maxLength = maxLineLength)
+      if (line == null) None else Some {
         val str = {
           c.toIterator.flatMap { charset => Try(StringUtil.fromBytes(line, StringUtil.codec(charset, CodingErrorAction.REPORT))).toOption } ++ IteratorUtil.getLazy { _ =>
             StringUtil.fromBytes(line, StringUtil.codec(c.headOption.getOrElse(Sparkling.DefaultCharset), CodingErrorAction.IGNORE))
           }
         }.next
-        val newC = IteratorUtil.distinct(pattern.findAllMatchIn(str).map(_.group(2)).filter(!cSet.contains(_))).toSeq
+        val newC = IteratorUtil.distinct(CharsetHtmlPattern.findAllMatchIn(str).map(_.group(2)).filter(!cSet.contains(_))).toSeq
         if (newC.nonEmpty) {
           c = newC ++ c
           cSet = c.toSet
