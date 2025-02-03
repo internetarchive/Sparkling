@@ -9,17 +9,28 @@ object RegexUtil {
 
   lazy val urlStartPattern: Regex = r("[a-z]+\\:.*")
   lazy val noWordCharacterPattern: Regex = r("[^\\p{L}\\p{M}]+")
-  lazy val newLineSpaceTabPattern: Regex = r("\\s+")
+  lazy val oneLineSpacePattern: Regex = r("\\s+")
+  lazy val newLineSpacePattern: Regex = "\\s*?\\n(\\s*)|\\s+".r
   lazy val tokenDelimiterPattern: Regex = r("[^\\p{L}\\p{M}0-9]+")
   lazy val nonLatinPattern: Regex = r("[^\\p{IsLatin}0-9\\s.,!?'\"()-]+")
 
   def matchesAbsoluteUrlStart(url: String): Boolean = urlStartPattern.pattern.matcher(url.toLowerCase).matches
   def oneValidWordCharacter(str: String): Boolean = str.nonEmpty && !noWordCharacterPattern.pattern.matcher(str).matches
-  def oneLineSpaceTrim(str: String): String = newLineSpaceTabPattern.replaceAllIn(str, " ").trim
+  def oneLineSpaceTrim(str: String): String = oneLineSpacePattern.replaceAllIn(str, " ").trim
+  def newLineSpaceTrim(str: String): String = {
+    newLineSpacePattern.replaceAllIn(str, { m =>
+      if (m.group(0).contains("\n")) {
+        if (Option(m.group(1)).exists(_.contains("\n"))) "\n\n" else "\n"
+      } else " "
+    }).trim
+  }
   def tokenize(str: String): Array[String] = tokenDelimiterPattern.replaceAllIn(str.toLowerCase, " ").trim.split(' ')
-  def filterLatin(str: String, stripSpaces: Boolean = true): String = {
-    val clean = nonLatinPattern.replaceAllIn(str, "").trim
-    if (stripSpaces) oneLineSpaceTrim(clean) else clean
+  def removeLongWords(str: String, maxWordLength: Int = 100): String = {
+    if (maxWordLength < 0) str else r(s"\\S{$maxWordLength,}").replaceAllIn(str, "")
+  }
+  def cleanLatin(str: String, stripSpaces: Boolean = true, maxWordLength: Int = 100): String = {
+    val clean = nonLatinPattern.replaceAllIn(removeLongWords(str, maxWordLength), "").trim
+    if (stripSpaces) newLineSpaceTrim(clean) else clean
   }
 
   def split(str: String, pattern: String, limit: Int = -1): Seq[String] = {

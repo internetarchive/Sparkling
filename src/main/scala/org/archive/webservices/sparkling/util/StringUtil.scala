@@ -76,17 +76,15 @@ object StringUtil {
 
   def splitAtLast(str: String, separator: String): (String, String) = {
     val idx = str.lastIndexOf(separator)
-    if (idx < 0) (str, "") else (str.take(idx), str.drop(idx + 1))
+    if (idx < 0) (str, "") else (str.take(idx), str.drop(idx + separator.length))
   }
 
   def splitAtFirst(str: String, separator: String): (String, String) = {
     val idx = str.indexOf(separator)
-    if (idx < 0) (str, "") else (str.take(idx), str.drop(idx + 1))
+    if (idx < 0) (str, "") else (str.take(idx), str.drop(idx + separator.length))
   }
 
-  def splitAt(str: String, separator: String): (String, String) = {
-    splitAtFirst(str, separator)
-  }
+  def splitAt(str: String, separator: String): (String, String) = splitAtFirst(str, separator)
 
   def padRight(str: String, length: Int, char: Character): String = str.padTo(length, char).mkString
   def padLeft(str: String, length: Int, char: Character): String = str.reverse.padTo(length, char).reverse.mkString

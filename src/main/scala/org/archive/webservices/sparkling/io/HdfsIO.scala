@@ -57,6 +57,8 @@ class HdfsIO private (val uri: String) extends Serializable {
 
   @transient private lazy val localFiles = collection.mutable.Map.empty[String, String]
 
+  @transient implicit lazy val accessContext: AccessContext = AccessContext(this)
+
   def clearFileLocalCopy(path: String): Unit = localFiles.synchronized {
     for (localCopy <- localFiles.remove(path)) {
       val f = new File(localCopy)

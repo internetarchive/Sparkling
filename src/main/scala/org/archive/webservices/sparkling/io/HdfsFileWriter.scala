@@ -1,13 +1,13 @@
 package org.archive.webservices.sparkling.io
 
-import java.io.{FileInputStream, OutputStream}
-
 import org.apache.hadoop.fs.Path
+import org.archive.webservices.sparkling.AccessContext
 import org.archive.webservices.sparkling.logging.{Log, LogContext}
 
+import java.io.{FileInputStream, OutputStream}
 import scala.util.Try
 
-class HdfsFileWriter private (filename: String, append: Boolean, replication: Short) extends OutputStream {
+class HdfsFileWriter private (accessContext: AccessContext, filename: String, append: Boolean, replication: Short) extends OutputStream {
   implicit val logContext: LogContext = LogContext(this)
 
   private val file = IOUtil.tmpFile
@@ -21,11 +21,11 @@ class HdfsFileWriter private (filename: String, append: Boolean, replication: Sh
     Log.info("Copying from temporary file " + file.getCanonicalPath + " to " + filename + "...")
     if (append) {
       val in = new FileInputStream(file)
-      val appendOut = HdfsIO.fs.append(new Path(filename))
+      val appendOut = accessContext.hdfsIO.fs.append(new Path(filename))
       IOUtil.copy(in, appendOut)
       appendOut.close()
       in.close()
-    } else HdfsIO.copyFromLocal(file.getCanonicalPath, filename, move = true, overwrite = true, replication)
+    } else accessContext.hdfsIO.copyFromLocal(file.getCanonicalPath, filename, move = true, overwrite = true, replication)
     if (!file.delete()) file.deleteOnExit()
     Log.info("Done. (" + filename + ")")
   }
@@ -37,8 +37,8 @@ class HdfsFileWriter private (filename: String, append: Boolean, replication: Sh
 }
 
 object HdfsFileWriter {
-  def apply(filename: String, overwrite: Boolean = false, append: Boolean = false, replication: Short = 0): HdfsFileWriter = {
-    if (!overwrite && !append) HdfsIO.ensureNewFile(filename)
-    new HdfsFileWriter(filename, append, replication)
+  def apply(filename: String, overwrite: Boolean = false, append: Boolean = false, replication: Short = 0)(implicit accessContext: AccessContext = AccessContext.default): HdfsFileWriter = {
+    if (!overwrite && !append) accessContext.hdfsIO.ensureNewFile(filename)
+    new HdfsFileWriter(accessContext, filename, append, replication)
   }
 }

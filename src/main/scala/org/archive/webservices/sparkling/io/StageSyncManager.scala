@@ -81,7 +81,7 @@ object StageSyncManager {
     }
   }
 
-  def lockMutex(): Unit = stage.lockMutex()
+  def lockMutex(blocking: Boolean = true): Unit = stage.lockMutex(blocking)
 
   def unlockMutex(): Unit = stage.unlockMutex()
 }
@@ -99,16 +99,21 @@ class StageSyncManager private (stageId: String) {
   private var claimed = Set.empty[String]
   private var lastClaimed = Map.empty[String, Long]
 
-  private var mutex: Option[Long] = None
+  private var mutex: Set[Long] = Set.empty
+  private var blockingMutex: Option[Long] = None
 
-  def lockMutex(): Unit = {
+  def lockMutex(blocking: Boolean = true): Unit = {
     val task = Sparkling.taskId
     if (mutex.contains(task)) return
+    def hold: Boolean = (blocking && mutex.nonEmpty) || blockingMutex.isDefined
     while (!mutex.contains(task)) {
-      while (mutex.isDefined) StageSyncManager.sleep()
-      synchronized(if (mutex.isEmpty) {
-        Log.info(s"Locking mutex for task $task.")
-        mutex = Some(task)
+      while (hold) StageSyncManager.sleep()
+      synchronized(if (!hold) {
+        if (blocking) {
+          Log.info(s"Locking mutex for task $task.")
+          blockingMutex = Some(task)
+        }
+        mutex += task
       })
     }
   }
@@ -117,8 +122,11 @@ class StageSyncManager private (stageId: String) {
     val task = Sparkling.taskId
     if (!mutex.contains(task)) return
     synchronized(if (mutex.contains(task)) {
-      Log.info(s"Unlocking mutex for task $task.")
-      mutex = None
+      if (blockingMutex.contains(task)) {
+        Log.info(s"Unlocking mutex for task $task.")
+        blockingMutex = None
+      }
+      mutex -= task
     })
   }
 
@@ -168,7 +176,8 @@ class StageSyncManager private (stageId: String) {
     cleanupHooks = Map.empty
     processes = Map.empty
     lastClaimed = Map.empty
-    mutex = None
+    mutex = Set.empty
+    blockingMutex = None
   }
 
   def syncProcess(cmd: String, workingDir: String, shell: => SystemProcess, exec: (SystemProcess, Int, String) => Unit, cleanup: (SystemProcess, Int) => Unit = (_, _) => {}): (SystemProcess, Int) = {

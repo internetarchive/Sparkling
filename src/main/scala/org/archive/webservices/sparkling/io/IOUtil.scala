@@ -18,6 +18,10 @@ object IOUtil {
 
   val EmptyStream: InputStream = new ByteArrayInputStream(Array.empty)
 
+  def concatPaths(paths: String*): String = {
+    paths.map(_.trim).filter(_.nonEmpty).mkString("/").replaceAll("/+", "/")
+  }
+
   def tmpFile: File = tmpFile()
 
   def tmpFile(prefix: String = tmpFilePrefix, ext: String = TmpExt, path: Option[String] = None, deleteOnExit: Boolean = true): File = {
