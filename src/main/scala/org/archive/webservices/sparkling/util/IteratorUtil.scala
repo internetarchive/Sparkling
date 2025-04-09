@@ -7,6 +7,7 @@ import java.util.concurrent.{CancellationException, FutureTask}
 import scala.annotation.tailrec
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, ExecutionContext, Future}
+import scala.util.Try
 
 object IteratorUtil {
   implicit val logContext: LogContext = LogContext(this)
@@ -355,5 +356,9 @@ object IteratorUtil {
         finally { buffer.synchronized(buffer.dequeue()) }
       }
     }
+  }
+
+  def tryCatch[A](iter: Iterator[A]): Iterator[A] = IteratorUtil.whileDefined {
+    Common.tryCatch(iter.hasNext).filter(identity).flatMap(_ => Common.tryCatch(iter.next))
   }
 }

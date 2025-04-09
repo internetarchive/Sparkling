@@ -26,6 +26,16 @@ object Common {
     throw new RuntimeException(msg)
   }
 
+  def tryCatch[A](action: => A): Option[A] = {
+    try {
+      Some(action)
+    } catch {
+      case e: Throwable =>
+        e.printStackTrace()
+        None
+    }
+  }
+
   def retry[R](times: Int = 30, sleepMillis: Int = 1000, log: (Int, Exception) => String)(run: Int => R)(implicit context: LogContext): R = {
     retryObj(Unit)(times, sleepMillis, log = (_, i, e) => log(i, e))((o, i) => run(i))
   }

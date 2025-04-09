@@ -20,10 +20,7 @@ class HttpMessage(val statusLine: String, val headers: Seq[(String, String)], va
   def contentEncoding: Option[String] = headerMap.get("content-encoding").map(_.toLowerCase)
   def contentLength: Option[Long] = headerMap.get("content-length").flatMap(l => Try { l.trim.toLong }.toOption)
   def mime: Option[String] = headerMap.get("content-type").map(StringUtil.prefixBySeparator(_, ";").trim.toLowerCase)
-  def charset: Option[String] = {
-    headerMap.get("content-type").flatMap(_.split(';').drop(1).headOption).map(_.trim).filter(_.startsWith("charset="))
-      .map(_.drop(8).trim.stripPrefix("\"").stripPrefix("'").stripSuffix("'").stripSuffix("\"").split(",", 2).head.trim).filter(_.nonEmpty).map(_.toUpperCase)
-  }
+  def charset: Option[String] = headerMap.get("content-type").flatMap(charsetFromContentTypeHeader)
   def redirectLocation: Option[String] = headerMap.get("location").map(_.trim)
   def isChunked: Boolean = headerMap.get("transfer-encoding").map(_.toLowerCase).contains("chunked")
 
@@ -64,6 +61,11 @@ object HttpMessage {
     "deflate" -> ((in: InputStream) => new DeflaterInputStream(in)),
     "br" -> ((in: InputStream) => new BrotliCompressorInputStream(in))
   )
+
+  def charsetFromContentTypeHeader(value: String): Option[String] = {
+    Some(value).flatMap(_.split(';').drop(1).headOption).map(_.trim).filter(_.startsWith("charset="))
+      .map(_.drop(8).trim.stripPrefix("\"").stripPrefix("'").stripSuffix("'").stripSuffix("\"").split(",", 2).head.trim).filter(_.nonEmpty).map(_.toUpperCase)
+  }
 
   def get(in: InputStream): Option[HttpMessage] = {
     if (in.markSupported()) in.mark(ResetBuffer)

@@ -285,7 +285,7 @@ object CdxServerIndex {
           IteratorUtil.cleanup(IOUtil.lines(in), in.close)
         })
         val groups = lines.chain { l =>
-          val grouped = IteratorUtil.groupSortedBy(l)(StringUtil.prefixBySeparator(_, " "))
+          val grouped = IteratorUtil.groupSortedBy(l)(s => surtPrefix(StringUtil.prefixBySeparator(s, " ")))
           if (endPrefix.isDefined) {
             val s = endPrefix.get
             grouped.takeWhile(_._1 <= s)

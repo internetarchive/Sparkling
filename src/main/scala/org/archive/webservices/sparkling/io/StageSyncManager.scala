@@ -5,7 +5,7 @@ import org.archive.webservices.sparkling.Sparkling
 import org.archive.webservices.sparkling.logging.{Log, LogContext}
 import org.archive.webservices.sparkling.util.Common
 
-import java.io.{BufferedInputStream, File, FileInputStream, InputStream}
+import java.io.{File, InputStream}
 import java.time.Instant
 import scala.reflect.ClassTag
 import scala.util.Try
@@ -41,9 +41,11 @@ object StageSyncManager {
 
   def launchDetachableShell(proc: SystemProcess): Int = proc.synchronized {
     val tmpSesId = "bash" + Instant.now.toEpochMilli
-    proc.exec("tmux -f /dev/null new-session -d -s " + tmpSesId + " '/bin/bash' \\; display-message -p -t " + tmpSesId + ":0 '#{pane_pid}'")
+    proc.exec("tmux -f /dev/null new-session -d -s " + tmpSesId + " '/bin/bash -c \"exec bash\"' \\; display-message -p -t " + tmpSesId + ":0 '#{pane_pid}'")
     val pid = proc.readAllInput().mkString.trim.toInt
-    proc.exec(s"kill -STOP $pid; reptyr -T $pid 2>/dev/null; kill -CONT $pid;", supportsEcho = true, blocking = true)
+    proc.exec(s"kill -STOP $pid; reptyr -T $pid 2>/dev/null; kill -CONT $pid")
+    proc.demandLine("echo $$", pid.toString)
+    proc.consumeAllInput()
     pid
   }
 
@@ -59,10 +61,10 @@ object StageSyncManager {
   }
 
   def syncProcess(cmd: String, workingDir: String, shell: => SystemProcess, exec: (SystemProcess, Int, String) => Unit, cleanup: (SystemProcess, Int) => Unit = (_, _) => {}): (SystemProcess, Int) = {
-    stage.syncProcess(cmd, workingDir, shell, exec)
+    stage.syncProcess(cmd, workingDir, shell, exec, cleanup)
   }
 
-  def claimProcess(workingDir: String): (SystemProcess, Int) = stage.claimProcess(workingDir)
+  def claimProcess(workingDir: String): (SystemProcess, Int, Boolean) = stage.claimProcess(workingDir)
 
   def claimFileIn(path: String): InputStream = stage.claimFileIn(path: String)
 
@@ -240,11 +242,11 @@ class StageSyncManager private (stageId: String) {
     })
   }
 
-  def claimProcess(workingDir: String): (SystemProcess, Int) = {
-    for ((proc, pid) <- processes.get(workingDir) if claimed.contains(workingDir)) return (proc, pid)
+  def claimProcess(workingDir: String): (SystemProcess, Int, Boolean) = {
+    for ((proc, pid) <- processes.get(workingDir) if claimed.contains(workingDir)) return (proc, pid, false)
 
     synchronized {
-      for ((proc, pid) <- processes.get(workingDir) if claimed.contains(workingDir)) return (proc, pid)
+      for ((proc, pid) <- processes.get(workingDir) if claimed.contains(workingDir)) return (proc, pid, false)
 
       val syncf = StageSyncManager.syncFile(workingDir, stageId)
       while (!syncf.createNewFile()) StageSyncManager.sleep()
@@ -252,12 +254,11 @@ class StageSyncManager private (stageId: String) {
 
       processes.get(workingDir) match {
         case Some((proc, pid)) =>
-          if (!isLastClaim(workingDir)) proc.synchronized {
-            proc.consumeAllInput(true)
+          if (!isLastClaim(workingDir)) {
             proc.exec(s"kill -STOP $pid; reptyr $pid 2>/dev/null; kill -CONT $pid", supportsEcho = false)
           }
           registerClaim(workingDir)
-          return (proc, pid)
+          return (proc, pid, true)
         case None =>
           throw new RuntimeException(s"No process available for $workingDir ($stageId).")
       }

@@ -57,13 +57,13 @@ class SystemProcess private (
 
   def consumeAllInput(supportsEcho: Boolean = _supportsEcho): Unit = if (supportsEcho) synchronized {
     val endLine = s"${SystemProcess.CommandEndToken} ${Instant.now.toEpochMilli}"
-    out.println(s"echo " + endLine)
+    out.println(s"echo $endLine")
     consumeToLine(endLine)
   }
 
   def readAllInput(supportsEcho: Boolean = _supportsEcho): Iterator[String] = if (supportsEcho) synchronized {
     val endLine = s"${SystemProcess.CommandEndToken} ${Instant.now.toEpochMilli}"
-    out.println(s"echo " + endLine)
+    out.println(s"echo $endLine")
     readToLine(endLine, includeEnd = false)
   } else Iterator.empty
 
@@ -112,6 +112,31 @@ class SystemProcess private (
 
   def consumeToLine(endLine: String, prefix: Boolean = false, pipe: Option[InputStream] = None): Unit = synchronized {
     IteratorUtil.consume(readToLine(endLine, prefix, pipe = pipe))
+  }
+
+  def demandLine(cmd: String, line: String, sleepMillis: Int = 100, pipe: Option[InputStream] = None): Unit = synchronized {
+    var stop = false
+    while (!stop) {
+      var reading = pipe.isEmpty
+      val lineFuture = pipe match {
+        case Some(p) => Future {
+          reading = true
+          StringUtil.readLine(p)
+        }
+        case None => stdoutLine
+      }
+      while (!reading) Thread.`yield`()
+      while (!lineFuture.isCompleted || (pipe.isDefined && stdoutLine.isCompleted)) {
+        if (pipe.isDefined && stdoutLine.isCompleted) nextStdout()
+        Thread.`yield`()
+        if (!lineFuture.isCompleted) {
+          out.println(cmd)
+          Thread.sleep(sleepMillis)
+        }
+      }
+      stop = lineFuture.value.get.get == line
+      if (pipe.isEmpty) nextStdout()
+    }
   }
 
   def exec(
