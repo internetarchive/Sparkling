@@ -7,7 +7,7 @@ import scala.util.Try
 class CatchingInputStream(in: InputStream) extends InputStream {
   private var eof = false
 
-  private def tryOrEof[R](action: => R, orElse: => R): R = {
+  private def tryOrEof[R](action: => R, orElse: R): R = {
     if (eof) orElse else {
       try {
         action
