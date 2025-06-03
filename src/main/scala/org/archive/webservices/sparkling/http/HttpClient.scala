@@ -37,7 +37,7 @@ object HttpClient {
       close: Boolean = true
   )(action: InputStream => R): R = {
     rangeRequestConnection(url, headers, offset, length, retries, sleepMillis, timeoutMillis, disconnect = false) { case connection: HttpURLConnection =>
-      val in = new CleanupInputStream(new BufferedInputStream(connection.getInputStream), connection.disconnect)
+      val in = new BufferedInputStream(new CleanupInputStream(connection.getInputStream, connection.disconnect))
       Common.cleanup(action(in))(() => if (close) in.close())
     }
   }
@@ -62,7 +62,7 @@ object HttpClient {
       close: Boolean = true
   )(action: HttpMessage => R): R = {
     rangeRequestConnection(url, headers, offset, length, retries, sleepMillis, timeoutMillis, disconnect = false) { case connection: HttpURLConnection =>
-      val in = new CleanupInputStream(new BufferedInputStream(connection.getInputStream), connection.disconnect)
+      val in = new BufferedInputStream(new CleanupInputStream(connection.getInputStream, connection.disconnect))
       Common.cleanup({
         val responseHeaders = connection.getHeaderFields.asScala.toSeq.flatMap { case (k, v) => v.asScala.map((if (k == null) "" else k) -> _) }
         val message = new HttpMessage(connection.getHeaderField(0), responseHeaders, in)
