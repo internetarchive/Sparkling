@@ -60,8 +60,8 @@ object StageSyncManager {
     })
   }
 
-  def syncProcess(cmd: String, workingDir: String, shell: => SystemProcess, exec: (SystemProcess, Int, String) => Unit, cleanup: (SystemProcess, Int) => Unit = (_, _) => {}): (SystemProcess, Int) = {
-    stage.syncProcess(cmd, workingDir, shell, exec, cleanup)
+  def syncProcess(cmd: String, workingDir: String, shell: => SystemProcess, exec: (SystemProcess, Int, String) => Unit, cleanup: (SystemProcess, Int) => Unit = (_, _) => {}, resync: Boolean = false): (SystemProcess, Int) = {
+    stage.syncProcess(cmd, workingDir, shell, exec, cleanup, resync)
   }
 
   def claimProcess(workingDir: String): (SystemProcess, Int, Boolean) = stage.claimProcess(workingDir)
@@ -182,20 +182,23 @@ class StageSyncManager private (stageId: String) {
     blockingMutex = None
   }
 
-  def syncProcess(cmd: String, workingDir: String, shell: => SystemProcess, exec: (SystemProcess, Int, String) => Unit, cleanup: (SystemProcess, Int) => Unit = (_, _) => {}): (SystemProcess, Int) = {
+  def syncProcess(cmd: String, workingDir: String, shell: => SystemProcess, exec: (SystemProcess, Int, String) => Unit, cleanup: (SystemProcess, Int) => Unit = (_, _) => {}, restart: Boolean = false): (SystemProcess, Int) = {
+    lazy val syncf = StageSyncManager.syncFile(workingDir, stageId)
+    lazy val pidf = StageSyncManager.pidFile(workingDir, stageId)
+
     def checkProcess(p: (SystemProcess, Int) => Boolean): Boolean = {
-      for ((process, pid) <- processes.get(workingDir)) p(process, pid)
+      if (!restart) for ((process, pid) <- processes.get(workingDir) if !process.destroyed) p(process, pid)
       true
     }
 
-    lazy val syncf = StageSyncManager.syncFile(workingDir, stageId)
-    lazy val pidf = StageSyncManager.pidFile(workingDir, stageId)
-    while (checkProcess((p, pid) => return (p, pid)) && !pidf.exists() && !syncf.createNewFile()) StageSyncManager.sleep()
+    while (checkProcess((p, pid) => return (p, pid)) && {
+      !((pidf.exists && !restart) || claimed.contains(workingDir) || syncf.createNewFile())
+    }) StageSyncManager.sleep()
 
     synchronized {
       checkProcess((p, pid) => return (p, pid))
       val p = shell
-      val pid = if (pidf.exists) {
+      val pid = if (pidf.exists && !restart) {
         val pid = IOUtil.lines(pidf.getAbsolutePath).mkString.trim.toInt
         processes += workingDir -> (p, pid)
         pid
@@ -254,11 +257,12 @@ class StageSyncManager private (stageId: String) {
 
       processes.get(workingDir) match {
         case Some((proc, pid)) =>
-          if (!isLastClaim(workingDir)) {
+          val reclaim = !isLastClaim(workingDir)
+          if (reclaim) {
             proc.exec(s"kill -STOP $pid; reptyr $pid 2>/dev/null; kill -CONT $pid", supportsEcho = false)
           }
           registerClaim(workingDir)
-          return (proc, pid, true)
+          return (proc, pid, reclaim)
         case None =>
           throw new RuntimeException(s"No process available for $workingDir ($stageId).")
       }

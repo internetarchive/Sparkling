@@ -54,6 +54,7 @@ object Common {
         case e: Exception =>
           for (o <- obj) Try(cleanup(o))
           Log.error(log(obj, retry, e))
+          e.printStackTrace()
           lastException = e
       }
     }
@@ -64,13 +65,19 @@ object Common {
     private var _done: Boolean = false
     private var _time: Long = System.currentTimeMillis
     private var _status: Option[String] = None
+    private var _idling: Boolean = false
     def isDone: Boolean = _done
     def lastAlive: Long = _time
     def lastStatus: Option[String] = _status
-    def alive(): Unit = _time = System.currentTimeMillis
+    def idling: Boolean = _idling
+    def idle(): Unit = _idling = true
+    def alive(): Unit = {
+      _time = System.currentTimeMillis
+      _idling = false
+    }
     def alive(status: String): Unit = {
       _status = Some(status)
-      _time = System.currentTimeMillis
+      alive()
     }
     def done(): Unit = {
       _done = true
@@ -140,20 +147,24 @@ object Common {
           return result
         } else {
           val wait = lastAlive + millis - System.currentTimeMillis
-          val result = thread.get(if (wait <= 0) 1 else wait, TimeUnit.MILLISECONDS)
+          val result = thread.get(if (wait <= 0) millis else wait, TimeUnit.MILLISECONDS)
           SparkUtil.removeTaskCleanup(thread)
           return result
         }
       } catch {
         case e: TimeoutException =>
-          if (lastAlive == reporter.lastAlive) {
-            Log.info("Timeout after " + millis + " milliseconds" + reporter.lastStatus.map(status => s" - Last status: $status").getOrElse("") + ".")
-            while (!thread.isDone) thread.cancel(true)
-            SparkUtil.removeTaskCleanup(thread)
-            throw e
+          if (reporter.idling) {
+            lastAlive = System.currentTimeMillis
           } else {
-            Log.info("Process is alive..." + reporter.lastStatus.map(status => s" - Last status: $status").getOrElse(""))
-            lastAlive = reporter.lastAlive
+            if (lastAlive == reporter.lastAlive) {
+              Log.info("Timeout after " + millis + " milliseconds" + reporter.lastStatus.map(status => s" - Last status: $status").getOrElse("") + ".")
+              while (!thread.isDone) thread.cancel(true)
+              SparkUtil.removeTaskCleanup(thread)
+              throw e
+            } else {
+              Log.info("Process is alive..." + reporter.lastStatus.map(status => s" - Last status: $status").getOrElse(""))
+              lastAlive = reporter.lastAlive
+            }
           }
         case e: Exception =>
           SparkUtil.removeTaskCleanup(thread)
