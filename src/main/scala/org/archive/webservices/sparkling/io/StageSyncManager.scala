@@ -60,8 +60,8 @@ object StageSyncManager {
     })
   }
 
-  def syncProcess(cmd: String, workingDir: String, shell: => SystemProcess, exec: (SystemProcess, Int, String) => Unit, cleanup: (SystemProcess, Int) => Unit = (_, _) => {}, resync: Boolean = false): (SystemProcess, Int) = {
-    stage.syncProcess(cmd, workingDir, shell, exec, cleanup, resync)
+  def syncProcess(cmd: String, workingDir: String, shell: => SystemProcess, exec: (SystemProcess, Int, String) => Unit, cleanup: (SystemProcess, Int) => Unit = (_, _) => {}, restart: Boolean = false): (SystemProcess, Int) = {
+    stage.syncProcess(cmd, workingDir, shell, exec, cleanup, restart)
   }
 
   def claimProcess(workingDir: String): (SystemProcess, Int, Boolean) = stage.claimProcess(workingDir)

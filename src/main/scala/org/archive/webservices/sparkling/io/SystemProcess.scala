@@ -13,6 +13,9 @@ class SystemProcess private (
     private var _supportsEcho: Boolean) {
   implicit val logContext: LogContext = LogContext(this)
 
+  private val _lock = new AnyRef()
+  def lock[R](action: => R): R = _lock.synchronized(action)
+
   private val out: PrintStream = IOUtil.print(process.getOutputStream, autoFlush = true)
   private val in: BufferedInputStream = new BufferedInputStream(process.getInputStream)
 
@@ -33,24 +36,9 @@ class SystemProcess private (
     true
   }
 
-  def lock[R](action: => R): R = {
-    synchronized {
-      _locked = true
-      try {
-        action
-      } finally {
-        _locked = false
-      }
-    }
-  }
-
-  private def sync[R](action: => R): R = {
-    if (_locked) action else synchronized(action)
-  }
-
   private var stdoutFuture: Option[Future[String]] = None
   private def stdoutLine: Future[String] = stdoutFuture.getOrElse(nextStdout())
-  private def nextStdout(): Future[String] = sync {
+  private def nextStdout(): Future[String] = {
     val future = ConcurrencyUtil.future {
       val line = StringUtil.readLine(in)
       Log.info("> " + line)
@@ -62,7 +50,7 @@ class SystemProcess private (
 
   def destroyed: Boolean = _destroyed
 
-  def destroy(): Unit = sync {
+  def destroy(): Unit = {
     process.destroy()
     in.close()
     out.close()
@@ -71,13 +59,13 @@ class SystemProcess private (
 
   def supportsEcho: Boolean = _supportsEcho
 
-  def consumeAllInput(supportsEcho: Boolean = _supportsEcho): Unit = if (supportsEcho) sync {
+  def consumeAllInput(supportsEcho: Boolean = _supportsEcho): Unit = if (supportsEcho) synchronized {
     val endLine = s"${SystemProcess.CommandEndToken} ${Instant.now.toEpochMilli}"
     out.println(s"echo $endLine")
     consumeToLine(endLine)
   }
 
-  def readAllInput(supportsEcho: Boolean = _supportsEcho): Iterator[String] = if (supportsEcho) sync {
+  def readAllInput(supportsEcho: Boolean = _supportsEcho): Iterator[String] = if (supportsEcho) synchronized {
     val endLine = s"${SystemProcess.CommandEndToken} ${Instant.now.toEpochMilli}"
     out.println(s"echo $endLine")
     readToLine(endLine, includeEnd = false)
@@ -85,7 +73,7 @@ class SystemProcess private (
 
   private def readLine(
       pipe: Option[InputStream] = None,
-      keepMaxBytes: Int = -1): String = sync {
+      keepMaxBytes: Int = -1): String = synchronized {
     val lineFuture = pipe match {
       case Some(p) => Future(StringUtil.readLine(p, maxLength = keepMaxBytes))
       case None => stdoutLine
@@ -103,7 +91,7 @@ class SystemProcess private (
       prefix: Boolean = false,
       includeEnd: Boolean = true,
       keepMaxBytes: Int = -1,
-      pipe: Option[InputStream] = None): Iterator[String] = sync {
+      pipe: Option[InputStream] = None): Iterator[String] = synchronized {
     var stop = false
     var remaining = keepMaxBytes
     IteratorUtil.whileDefined {
@@ -126,11 +114,11 @@ class SystemProcess private (
     }.flatten
   }
 
-  def consumeToLine(endLine: String, prefix: Boolean = false, pipe: Option[InputStream] = None): Unit = sync {
+  def consumeToLine(endLine: String, prefix: Boolean = false, pipe: Option[InputStream] = None): Unit = synchronized {
     IteratorUtil.consume(readToLine(endLine, prefix, pipe = pipe))
   }
 
-  def demandLine(cmd: String, line: String, sleepMillis: Int = 100, pipe: Option[InputStream] = None): Unit = sync {
+  def demandLine(cmd: String, line: String, sleepMillis: Int = 100, pipe: Option[InputStream] = None): Unit = synchronized {
     var stop = false
     while (!stop) {
       var reading = pipe.isEmpty
@@ -162,7 +150,7 @@ class SystemProcess private (
       supportsEcho: Boolean = _supportsEcho,
       waitForLine: Option[String] = None,
       waitForPrefix: Boolean = false,
-      pipe: Option[InputStream] = None): Unit = sync {
+      pipe: Option[InputStream] = None): Unit = synchronized {
     if (clearInput) consumeAllInput()
     _lastError = Seq.empty
     out.println(cmd)
