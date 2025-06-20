@@ -198,25 +198,34 @@ class StageSyncManager private (stageId: String) {
     synchronized {
       checkProcess((p, pid) => return (p, pid))
       val p = shell
-      val pid = if (pidf.exists && !restart) {
+
+      if (pidf.exists) {
         val pid = IOUtil.lines(pidf.getAbsolutePath).mkString.trim.toInt
-        processes += workingDir -> (p, pid)
-        pid
-      } else {
-        syncf.deleteOnExit()
-        val pid = p.synchronized {
-          val pid = StageSyncManager.launchDetachableShell(p)
-          exec(p, pid, s"exec $cmd")
-          IOUtil.writeLines(pidf.getAbsolutePath, Seq(pid.toString))
-          pidf.deleteOnExit()
+        if (restart) {
+          val oldPid = processes.get(workingDir).map(_._2)
+          if (!oldPid.contains(pid)) {
+            // already restarted
+            processes += workingDir -> (p, pid)
+            return (p, pid)
+          }
+        } else {
           processes += workingDir -> (p, pid)
-          cleanupHooks += workingDir -> cleanup
-          pid
+          return (p, pid)
         }
-        registerClaim(workingDir)
-        pid
       }
-      (p, pid)
+
+      syncf.deleteOnExit()
+
+      p.synchronized {
+        val pid = StageSyncManager.launchDetachableShell(p)
+        exec(p, pid, s"exec $cmd")
+        IOUtil.writeLines(pidf.getAbsolutePath, Seq(pid.toString))
+        pidf.deleteOnExit()
+        processes += workingDir -> (p, pid)
+        cleanupHooks += workingDir -> cleanup
+        registerClaim(workingDir)
+        (p, pid)
+      }
     }
   }
 
