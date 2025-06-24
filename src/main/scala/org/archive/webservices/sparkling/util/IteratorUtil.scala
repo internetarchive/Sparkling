@@ -361,4 +361,23 @@ object IteratorUtil {
   def tryCatch[A](iter: Iterator[A]): Iterator[A] = IteratorUtil.whileDefined {
     Common.tryCatch(iter.hasNext).filter(identity).flatMap(_ => Common.tryCatch(iter.next))
   }
+
+  def tryFinally[A](iter: Iterator[A], doFinally: => Unit): Iterator[A] = IteratorUtil.whileDefined {
+    val hasNext = try {
+      iter.hasNext
+    } catch {
+      case t: Throwable =>
+        doFinally
+        throw t
+    }
+    if (hasNext) Some {
+      try {
+        iter.next
+      } catch {
+        case t: Throwable =>
+          doFinally
+          throw t
+      }
+    } else None
+  } ++ noop(doFinally)
 }

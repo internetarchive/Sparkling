@@ -51,10 +51,10 @@ class SystemProcess private (
   def destroyed: Boolean = _destroyed
 
   def destroy(): Unit = {
-    process.destroy()
+    _destroyed = true
     in.close()
     out.close()
-    _destroyed = true
+    process.destroy()
   }
 
   def supportsEcho: Boolean = _supportsEcho

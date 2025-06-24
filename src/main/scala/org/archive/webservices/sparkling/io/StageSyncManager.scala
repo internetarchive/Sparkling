@@ -3,7 +3,7 @@ package org.archive.webservices.sparkling.io
 import org.apache.spark.rdd.RDD
 import org.archive.webservices.sparkling.Sparkling
 import org.archive.webservices.sparkling.logging.{Log, LogContext}
-import org.archive.webservices.sparkling.util.Common
+import org.archive.webservices.sparkling.util.{Common, IteratorUtil}
 
 import java.io.{File, InputStream}
 import java.time.Instant
@@ -102,6 +102,7 @@ class StageSyncManager private (stageId: String) {
   private var lastClaimed = Map.empty[String, Long]
 
   private var mutex: Set[Long] = Set.empty
+  private val processLock = new AnyRef
   private var blockingMutex: Option[Long] = None
 
   def lockMutex(blocking: Boolean = true): Unit = {
@@ -138,7 +139,7 @@ class StageSyncManager private (stageId: String) {
       while (syncing) StageSyncManager.sleep()
       synchronized(activeTasks += task)
       Iterator.empty
-    } ++ partition ++ Iterator(true).flatMap { _ =>
+    } ++ IteratorUtil.tryFinally(partition, {
       synchronized {
         activeTasks -= task
         syncTasks += task
@@ -154,8 +155,7 @@ class StageSyncManager private (stageId: String) {
         syncTasks -= task
         if (syncTasks.isEmpty) syncing = false
       }
-      Iterator.empty
-    }
+    })
   }
 
   private def syncStage(): Unit = synchronized {
@@ -165,7 +165,7 @@ class StageSyncManager private (stageId: String) {
     files = Map.empty
   }
 
-  def cleanup(): Unit = synchronized {
+  def cleanup(): Unit = synchronized(processLock.synchronized {
     syncStage()
     for ((d, (p, pid)) <- processes) {
       Common.sync(StageSyncManager.syncFile(d, stageId)) {
@@ -180,6 +180,16 @@ class StageSyncManager private (stageId: String) {
     lastClaimed = Map.empty
     mutex = Set.empty
     blockingMutex = None
+  })
+
+  def claimFileIn(path: String): InputStream = {
+    files.getOrElse(path, synchronized {
+      files.getOrElse(path, {
+        val in = new LazyBufferedFileInputStream(path)
+        files += path -> in
+        in
+      })
+    })
   }
 
   def syncProcess(cmd: String, workingDir: String, shell: => SystemProcess, exec: (SystemProcess, Int, String) => Unit, cleanup: (SystemProcess, Int) => Unit = (_, _) => {}, restart: Boolean = false): (SystemProcess, Int) = {
@@ -195,9 +205,9 @@ class StageSyncManager private (stageId: String) {
       !((pidf.exists && !restart) || claimed.contains(workingDir) || syncf.createNewFile())
     }) StageSyncManager.sleep()
 
-    synchronized {
+    processLock.synchronized {
       checkProcess((p, pid) => return (p, pid))
-      val p = shell
+      var p = shell
 
       if (pidf.exists) {
         val pid = IOUtil.lines(pidf.getAbsolutePath).mkString.trim.toInt
@@ -216,16 +226,36 @@ class StageSyncManager private (stageId: String) {
 
       syncf.deleteOnExit()
 
-      p.synchronized {
-        val pid = StageSyncManager.launchDetachableShell(p)
-        exec(p, pid, s"exec $cmd")
-        IOUtil.writeLines(pidf.getAbsolutePath, Seq(pid.toString))
-        pidf.deleteOnExit()
-        processes += workingDir -> (p, pid)
-        cleanupHooks += workingDir -> cleanup
-        registerClaim(workingDir)
-        (p, pid)
+      var retry = true
+      while (retry) {
+        try {
+          Log.info(s"Launching $workingDir...")
+          try {
+            return Common.timeout(600000) { // 10 minutes
+              val pid = StageSyncManager.launchDetachableShell(p)
+              exec(p, pid, s"exec $cmd")
+              IOUtil.writeLines(pidf.getAbsolutePath, Seq(pid.toString))
+              pidf.deleteOnExit()
+              processes += workingDir -> (p, pid)
+              cleanupHooks += workingDir -> cleanup
+              registerClaim(workingDir)
+              retry = false
+              (p, pid)
+            }
+          } finally {
+            if (!retry) Log.info(s"Launched $workingDir.")
+          }
+        } catch {
+          case e: Exception =>
+            Log.error(e)
+            Log.info(s"Retrying after error (${e.getMessage}): $workingDir...")
+            e.printStackTrace()
+            p.destroy()
+            p = shell
+        }
       }
+
+      throw new RuntimeException("This can't be reached...")
     }
   }
 
@@ -244,20 +274,10 @@ class StageSyncManager private (stageId: String) {
     }
   }
 
-  def claimFileIn(path: String): InputStream = {
-    files.getOrElse(path, synchronized {
-      files.getOrElse(path, {
-        val in = new LazyBufferedFileInputStream(path)
-        files += path -> in
-        in
-      })
-    })
-  }
-
   def claimProcess(workingDir: String): (SystemProcess, Int, Boolean) = {
     for ((proc, pid) <- processes.get(workingDir) if claimed.contains(workingDir)) return (proc, pid, false)
 
-    synchronized {
+    processLock.synchronized {
       for ((proc, pid) <- processes.get(workingDir) if claimed.contains(workingDir)) return (proc, pid, false)
 
       val syncf = StageSyncManager.syncFile(workingDir, stageId)

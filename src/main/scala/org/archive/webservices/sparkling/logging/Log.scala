@@ -34,5 +34,11 @@ object Log {
     }
   )
 
+  def error(e: Throwable)(implicit context: LogContext): Unit = {
+    val exception = e.getClass.getCanonicalName
+    val message = e.getMessage
+    error(exception + Option(message).map(": " + _).getOrElse(""))
+  }
+
   def debug(msg: String*)(implicit context: LogContext): Unit = log(msg.mkString(MsgSeparator), LogLevels.Debug)
 }
