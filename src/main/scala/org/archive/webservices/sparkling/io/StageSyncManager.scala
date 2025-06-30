@@ -2,6 +2,7 @@ package org.archive.webservices.sparkling.io
 
 import org.apache.spark.rdd.RDD
 import org.archive.webservices.sparkling.Sparkling
+import org.archive.webservices.sparkling.io.StageSyncManager.initFile
 import org.archive.webservices.sparkling.logging.{Log, LogContext}
 import org.archive.webservices.sparkling.util.{Common, IteratorUtil}
 
@@ -22,6 +23,12 @@ object StageSyncManager {
   }
 
   def stageId: String = stageId(Sparkling.taskContext.map(_.stageId).getOrElse(0))
+
+  def initFile(workingDir: String): File = {
+    // this is exclusively per JVM to sync across JVMs / executors (not threads / tasks)
+    // stays until sync at the end of all parallel tasks of an executor
+    new File(workingDir, "_initializing")
+  }
 
   def syncFile(workingDir: String, stageId: String): File = {
     // this is exclusively per JVM to sync across JVMs / executors (not threads / tasks)
@@ -95,48 +102,76 @@ class StageSyncManager private (stageId: String) {
   private var syncTasks = Set.empty[Long]
   private var syncing: Boolean = false
 
+  private var files = Map.empty[String, InputStream]
+
+  private val processLock = new AnyRef
   private var processes = Map.empty[String, (SystemProcess, Int)]
   private var cleanupHooks = Map.empty[String, (SystemProcess, Int) => Unit]
-  private var files = Map.empty[String, InputStream]
   private var claimed = Set.empty[String]
   private var lastClaimed = Map.empty[String, Long]
 
+  private val mutexLock = new AnyRef
   private var mutex: Set[Long] = Set.empty
-  private val processLock = new AnyRef
   private var blockingMutex: Option[Long] = None
 
   def lockMutex(blocking: Boolean = true): Unit = {
     val task = Sparkling.taskId
-    if (mutex.contains(task)) return
-    def hold: Boolean = (blocking && mutex.nonEmpty) || blockingMutex.isDefined
+    Log.info(s"Locking mutex for task $task... (blocking: $blocking)")
+    if (mutex.contains(task)) {
+      Log.info(s"Already locked $task (blocking: $blocking).")
+      return
+    }
+    def hold: Boolean = {
+      (blocking && mutex.nonEmpty && !mutex.contains(task)) || (blockingMutex.isDefined && !blockingMutex.contains(task))
+    }
     while (!mutex.contains(task)) {
-      while (hold) StageSyncManager.sleep()
-      synchronized(if (!hold) {
-        if (blocking) {
-          Log.info(s"Locking mutex for task $task.")
-          blockingMutex = Some(task)
+      if (hold) {
+        Log.info(s"Waiting for mutex for task $task... (blocking: $blocking, blocking task: $blockingMutex)")
+        while (hold) StageSyncManager.sleep()
+        Log.info(s"Mutex available for $task, attempting... (blocking: $blocking)")
+      }
+      Log.info(s"Synchronized #lockMutex.. (task: $task, blocking: $blocking)")
+      mutexLock.synchronized {
+        Log.info(s"Synchronized #lockMutex....  (task: $task, blocking: $blocking)")
+        if (!hold) {
+          if (blocking) {
+            Log.info(s"Locked mutex for task $task (blocking: $blocking).")
+            blockingMutex = Some(task)
+          }
+          mutex += task
         }
-        mutex += task
-      })
+        Log.info(s"Synchronized #lockMutex.  (task: $task, blocking: $blocking)")
+      }
     }
   }
 
   def unlockMutex(): Unit = {
     val task = Sparkling.taskId
-    if (!mutex.contains(task)) return
-    synchronized(if (mutex.contains(task)) {
-      if (blockingMutex.contains(task)) {
-        Log.info(s"Unlocking mutex for task $task.")
-        blockingMutex = None
+    Log.info(s"Unlocking mutex for task $task...")
+    if (!mutex.contains(task)) {
+      Log.info(s"Already unlocked $task.")
+      return
+    }
+    Log.info(s"Synchronized #unlockMutex.. (task: $task)")
+    mutexLock.synchronized {
+      Log.info(s"Synchronized #unlockMutex.... (task: $task)")
+      if (mutex.contains(task)) {
+        if (blockingMutex.contains(task)) {
+          Log.info(s"Unlocked mutex for task $task.")
+          blockingMutex = None
+        }
+        mutex -= task
       }
-      mutex -= task
-    })
+    }
+    Log.info(s"Synchronized #unlockMutex. (task: $task)")
   }
 
   def syncPartition[A](partition: Iterator[A]): Iterator[A] = {
     val task = Sparkling.taskId
     Iterator(true).flatMap { _ =>
+      Log.info(s"Syncing task $task, waiting...")
       while (syncing) StageSyncManager.sleep()
+      Log.info(s"Syncing task $task...")
       synchronized(activeTasks += task)
       Iterator.empty
     } ++ IteratorUtil.tryFinally(partition, {
@@ -149,7 +184,11 @@ class StageSyncManager private (stageId: String) {
         }
       }
       // wait here until another task / core of this JVM / executor encounters activeTasks.isEmpty and syncs up
-      while (!syncing) StageSyncManager.sleep()
+      if (!syncing) {
+        Log.info(s"Waiting for tasks to sync up...")
+        while (!syncing) StageSyncManager.sleep()
+        Log.info(s"Tasks synced up...")
+      }
       // complete syncing
       synchronized {
         syncTasks -= task
@@ -158,29 +197,60 @@ class StageSyncManager private (stageId: String) {
     })
   }
 
-  private def syncStage(): Unit = synchronized {
-    for (f <- claimed.map(StageSyncManager.syncFile(_, stageId))) f.delete()
-    for (s <- files.values) s.close()
-    claimed = Set.empty
-    files = Map.empty
+  private def syncStage(): Unit = {
+    Log.info(s"Synchronized #syncStage..")
+    synchronized {
+      Log.info(s"Synchronized #syncStage....")
+
+      Log.info(s"Synchronized #syncStage/processLock..")
+      processLock.synchronized {
+        Log.info(s"Synchronized #syncStage/processLock....")
+        for (d <- claimed) IOUtil.delete(StageSyncManager.syncFile(d, stageId))
+        claimed = Set.empty
+      }
+      Log.info(s"Synchronized #syncStage/processLock.")
+
+      // avoid blocking if a pipe was not properly closed
+      for (s <- files.values) Common.tryCatch(Common.timeout(10000)(s.close()))
+      files = Map.empty
+    }
+    Log.info(s"Synchronized #syncStage.")
   }
 
-  def cleanup(): Unit = synchronized(processLock.synchronized {
-    syncStage()
-    for ((d, (p, pid)) <- processes) {
-      Common.sync(StageSyncManager.syncFile(d, stageId)) {
-        for (f <- Some(StageSyncManager.pidFile(d, stageId)).filter(_.exists())) f.delete()
-        for (f <- Some(StageSyncManager.claimedFile(d, stageId)).filter(_.exists())) f.delete()
-        for (cleanup <- cleanupHooks.get(d)) cleanup(p, pid)
-        p.destroy()
+  def cleanup(): Unit = {
+    Log.info(s"Synchronized #cleanup..")
+    synchronized {
+      Log.info(s"Synchronized #cleanup....")
+      processLock.synchronized {
+        Log.info(s"Synchronized #cleanup/processLock...")
+        syncStage()
+        for ((d, (p, pid)) <- processes) {
+          Log.info(s"Synchronized #cleanup/syncFile..")
+          // sync is okay, because claimed was cleared before within the same processLock
+          Common.sync(StageSyncManager.syncFile(d, stageId)) {
+            Log.info(s"Synchronized #cleanup/syncFile....")
+            for (f <- Some(StageSyncManager.pidFile(d, stageId)).filter(_.exists())) f.delete()
+            for (f <- Some(StageSyncManager.claimedFile(d, stageId)).filter(_.exists())) f.delete()
+            for (cleanup <- cleanupHooks.get(d)) Common.tryCatch(Common.timeout(10000)(cleanup(p, pid)))
+            p.destroy()
+          }
+          Log.info(s"Synchronized #cleanup/syncFile.")
+        }
+        processes = Map.empty
+        lastClaimed = Map.empty
+        cleanupHooks = Map.empty
       }
+      Log.info(s"Synchronized #cleanup/processLock.")
+      Log.info(s"Synchronized #cleanup/mutexLock..")
+      mutexLock.synchronized {
+        Log.info(s"Synchronized #cleanup/mutexLock....")
+        mutex = Set.empty
+        blockingMutex = None
+      }
+      Log.info(s"Synchronized #cleanup/mutexLock.")
     }
-    cleanupHooks = Map.empty
-    processes = Map.empty
-    lastClaimed = Map.empty
-    mutex = Set.empty
-    blockingMutex = None
-  })
+    Log.info(s"Synchronized #cleanup.")
+  }
 
   def claimFileIn(path: String): InputStream = {
     files.getOrElse(path, synchronized {
@@ -192,74 +262,7 @@ class StageSyncManager private (stageId: String) {
     })
   }
 
-  def syncProcess(cmd: String, workingDir: String, shell: => SystemProcess, exec: (SystemProcess, Int, String) => Unit, cleanup: (SystemProcess, Int) => Unit = (_, _) => {}, restart: Boolean = false): (SystemProcess, Int) = {
-    lazy val syncf = StageSyncManager.syncFile(workingDir, stageId)
-    lazy val pidf = StageSyncManager.pidFile(workingDir, stageId)
-
-    def checkProcess(p: (SystemProcess, Int) => Boolean): Boolean = {
-      if (!restart) for ((process, pid) <- processes.get(workingDir) if !process.destroyed) p(process, pid)
-      true
-    }
-
-    while (checkProcess((p, pid) => return (p, pid)) && {
-      !((pidf.exists && !restart) || claimed.contains(workingDir) || syncf.createNewFile())
-    }) StageSyncManager.sleep()
-
-    processLock.synchronized {
-      checkProcess((p, pid) => return (p, pid))
-      var p = shell
-
-      if (pidf.exists) {
-        val pid = IOUtil.lines(pidf.getAbsolutePath).mkString.trim.toInt
-        if (restart) {
-          val oldPid = processes.get(workingDir).map(_._2)
-          if (!oldPid.contains(pid)) {
-            // already restarted
-            processes += workingDir -> (p, pid)
-            return (p, pid)
-          }
-        } else {
-          processes += workingDir -> (p, pid)
-          return (p, pid)
-        }
-      }
-
-      syncf.deleteOnExit()
-
-      var retry = true
-      while (retry) {
-        try {
-          Log.info(s"Launching $workingDir...")
-          try {
-            return Common.timeout(600000) { // 10 minutes
-              val pid = StageSyncManager.launchDetachableShell(p)
-              exec(p, pid, s"exec $cmd")
-              IOUtil.writeLines(pidf.getAbsolutePath, Seq(pid.toString))
-              pidf.deleteOnExit()
-              processes += workingDir -> (p, pid)
-              cleanupHooks += workingDir -> cleanup
-              registerClaim(workingDir)
-              retry = false
-              (p, pid)
-            }
-          } finally {
-            if (!retry) Log.info(s"Launched $workingDir.")
-          }
-        } catch {
-          case e: Exception =>
-            Log.error(e)
-            Log.info(s"Retrying after error (${e.getMessage}): $workingDir...")
-            e.printStackTrace()
-            p.destroy()
-            p = shell
-        }
-      }
-
-      throw new RuntimeException("This can't be reached...")
-    }
-  }
-
-  private def registerClaim(workingDir: String): Unit = synchronized {
+  private def registerLastClaim(workingDir: String): Unit = {
     claimed += workingDir
     val millis = Instant.now.toEpochMilli
     val claimf = StageSyncManager.claimedFile(workingDir, stageId)
@@ -274,23 +277,114 @@ class StageSyncManager private (stageId: String) {
     }
   }
 
+  def syncProcess(cmd: String, workingDir: String, shell: => SystemProcess, exec: (SystemProcess, Int, String) => Unit, cleanup: (SystemProcess, Int) => Unit = (_, _) => {}, restart: Boolean = false): (SystemProcess, Int) = {
+    if (!restart) for ((process, pid) <- processes.get(workingDir) if !process.destroyed) return (process, pid)
+
+    Log.info(s"Synchronized #syncProcess/processLock.. ($workingDir, $stageId)")
+    lazy val syncf = StageSyncManager.syncFile(workingDir, stageId)
+    Common.synchronizedIf(processLock, {
+      if (!restart) for ((process, pid) <- processes.get(workingDir) if !process.destroyed) return (process, pid)
+      syncf.createNewFile() || claimed.contains(workingDir)
+    }, StageSyncManager.sleep()) {
+      Log.info(s"Synchronized #syncProcess/processLock.... ($workingDir, $stageId)")
+
+      var p = shell
+
+      val pidf = StageSyncManager.pidFile(workingDir, stageId)
+      if (pidf.exists) {
+        var taken = false
+        val pid = IOUtil.lines(pidf.getAbsolutePath).mkString.trim.toInt
+        try {
+          if (restart) {
+            val oldPid = processes.get(workingDir).map(_._2)
+            if (!oldPid.contains(pid)) {
+              Log.info(s"Process already restarted $workingDir, $stageId.")
+              taken = true
+              return (p, pid)
+            }
+          } else {
+            Log.info(s"Process exists $workingDir, $stageId.")
+            taken = true
+            return (p, pid)
+          }
+        } finally {
+          if (taken) {
+            processes += workingDir -> (p, pid)
+            IOUtil.delete(syncf)
+            claimed -= workingDir
+            lastClaimed -= workingDir
+            Log.info(s"Synchronized #syncProcess/processLock. (Process existed $workingDir, $stageId.)")
+          }
+        }
+      }
+
+      // no other executor (re)started, therefore clean up...
+      for {
+        (p, pid) <- processes.get(workingDir)
+        cleanup <- cleanupHooks.get(workingDir)
+      } {
+        Log.info(s"Stopping old process ($pid) $workingDir...")
+        p.destroy()
+        Log.info(s"Cleaning up old process ($pid) $workingDir...")
+        Common.tryCatch(Common.timeout(10000)(cleanup(p, pid)))
+        Log.info(s"Cleaned up old process ($pid) $workingDir.")
+      }
+
+      Log.info(s"Synchronized #syncProcess/initFile.. ($workingDir)")
+      Common.sync(initFile(workingDir)) {
+        Log.info(s"Synchronized #syncProcess/initFile.... ($workingDir)")
+        var launched = false
+        Common.infinite {
+          try {
+            Log.info(s"Launching $workingDir...")
+            return Common.timeout(600000) { // 10 minutes
+              val pid = StageSyncManager.launchDetachableShell(p)
+              exec(p, pid, s"exec $cmd")
+              IOUtil.writeLines(pidf.getAbsolutePath, Seq(pid.toString))
+              processes += workingDir -> (p, pid)
+              cleanupHooks += workingDir -> cleanup
+              registerLastClaim(workingDir)
+              launched = true
+              (p, pid)
+            }
+          } catch {
+            case e: Exception =>
+              Log.error(e)
+              Log.info(s"Retrying after error (${e.getMessage}): $workingDir...")
+              e.printStackTrace()
+              p.destroy()
+              p = shell
+          } finally {
+            if (launched) Log.info(s"Synchronized #syncProcess/processLock. (Launched $workingDir, $stageId.)")
+          }
+        }
+      }
+    }
+  }
+
   def claimProcess(workingDir: String): (SystemProcess, Int, Boolean) = {
     for ((proc, pid) <- processes.get(workingDir) if claimed.contains(workingDir)) return (proc, pid, false)
 
-    processLock.synchronized {
+    Log.info(s"Synchronized #claimProcess/processLock.. ($workingDir, $stageId)")
+    lazy val syncf = StageSyncManager.syncFile(workingDir, stageId)
+    Common.synchronizedIf(processLock, {
       for ((proc, pid) <- processes.get(workingDir) if claimed.contains(workingDir)) return (proc, pid, false)
-
-      val syncf = StageSyncManager.syncFile(workingDir, stageId)
-      while (!syncf.createNewFile()) StageSyncManager.sleep()
-      syncf.deleteOnExit()
+      syncf.createNewFile()
+    }, StageSyncManager.sleep()) {
+      Log.info(s"Synchronized #claimProcess/processLock.... ($workingDir, $stageId)")
 
       processes.get(workingDir) match {
         case Some((proc, pid)) =>
+          Log.info(s"Claiming process $workingDir...")
+
           val reclaim = !isLastClaim(workingDir)
           if (reclaim) {
             proc.exec(s"kill -STOP $pid; reptyr $pid 2>/dev/null; kill -CONT $pid", supportsEcho = false)
           }
-          registerClaim(workingDir)
+
+          registerLastClaim(workingDir)
+
+          Log.info(s"Synchronized #claimProcess/processLock. (Claimed process $workingDir, $stageId.)")
           return (proc, pid, reclaim)
         case None =>
           throw new RuntimeException(s"No process available for $workingDir ($stageId).")

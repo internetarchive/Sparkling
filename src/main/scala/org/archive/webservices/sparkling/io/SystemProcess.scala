@@ -1,10 +1,11 @@
 package org.archive.webservices.sparkling.io
 
 import org.archive.webservices.sparkling.logging.{Log, LogContext}
-import org.archive.webservices.sparkling.util.{ConcurrencyUtil, IteratorUtil, StringUtil}
+import org.archive.webservices.sparkling.util.{Common, ConcurrencyUtil, IteratorUtil, StringUtil}
 
 import java.io._
 import java.time.Instant
+import java.util.concurrent.TimeUnit
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.Future
 
@@ -52,9 +53,15 @@ class SystemProcess private (
 
   def destroy(): Unit = {
     _destroyed = true
-    in.close()
-    out.close()
-    process.destroy()
+    Common.tryCatch(in.close())
+    Common.tryCatch(out.close())
+    val terminated = Common.tryCatch {
+      process.destroy()
+      process.waitFor(10, TimeUnit.SECONDS)
+    }.getOrElse(false)
+    if (!terminated) Common.tryCatch {
+      process.destroyForcibly().waitFor(10, TimeUnit.SECONDS)
+    }
   }
 
   def supportsEcho: Boolean = _supportsEcho

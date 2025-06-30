@@ -1,12 +1,15 @@
 package org.archive.webservices.sparkling.util
 
-import java.util.concurrent.{TimeUnit, TimeoutException}
+import org.archive.webservices.sparkling.io.IOUtil
 import org.archive.webservices.sparkling.logging.{Log, LogContext}
 
 import java.io.File
+import java.util.concurrent.{TimeUnit, TimeoutException}
 import scala.util.Try
 
 object Common {
+  private lazy val CommonLogContext = LogContext(this)
+
   def lazyValWithCleanup[A](create: => A)(cleanup: A => Unit = (_: A) => {}): ManagedVal[A] = ManagedVal[A](
     create,
     {
@@ -26,23 +29,23 @@ object Common {
     throw new RuntimeException(msg)
   }
 
-  def tryCatch[A](action: => A): Option[A] = {
+  def tryCatch[A](action: => A)(implicit context: LogContext = CommonLogContext): Option[A] = {
     try {
       Some(action)
     } catch {
       case e: Throwable =>
-        e.printStackTrace()
+        Log.error(e)
         None
     }
   }
 
-  def retry[R](times: Int = 30, sleepMillis: Int = 1000, log: (Int, Exception) => String)(run: Int => R)(implicit context: LogContext): R = {
+  def retry[R](times: Int = 30, sleepMillis: Int = 1000, log: (Int, Exception) => String)(run: Int => R)(implicit context: LogContext = CommonLogContext): R = {
     retryObj(Unit)(times, sleepMillis, log = (_, i, e) => log(i, e))((o, i) => run(i))
   }
 
   def retryObj[O, R](
       init: => O
-  )(times: Int = 30, sleepMillis: Int = 1000, cleanup: O => Unit = (_: O) => {}, log: (Option[O], Int, Exception) => String)(run: (O, Int) => R)(implicit context: LogContext): R = {
+  )(times: Int = 30, sleepMillis: Int = 1000, cleanup: O => Unit = (_: O) => {}, log: (Option[O], Int, Exception) => String)(run: (O, Int) => R)(implicit context: LogContext = CommonLogContext): R = {
     var lastException: Exception = null
     for (retry <- 0 to times) {
       if (retry > 0) Thread.sleep(sleepMillis)
@@ -94,7 +97,7 @@ object Common {
     iterTimeout(iter, millis, (idx: Long, item: R) => Some(status(idx, item)))
   }
 
-  def iterTimeout[R](iter: Iterator[R], millis: Long, status: (Long, R) => Option[String] = (_: Long, _: R) => None)(implicit context: LogContext): Iterator[R] = {
+  def iterTimeout[R](iter: Iterator[R], millis: Long, status: (Long, R) => Option[String] = (_: Long, _: R) => None)(implicit context: LogContext = CommonLogContext): Iterator[R] = {
     var item: Option[(R, Option[String])] = None
     var lastLog = System.currentTimeMillis
     var idx = -1L
@@ -115,7 +118,7 @@ object Common {
     }
   }
 
-  def timeout[R](millis: Long, status: Option[String] = None)(action: => R)(implicit context: LogContext): R = {
+  def timeout[R](millis: Long, status: Option[String] = None)(action: => R)(implicit context: LogContext = CommonLogContext): R = {
     if (millis < 0) return action
     val task = ConcurrencyUtil.thread(useExecutionContext = false)(action)
     try { task.get(millis, TimeUnit.MILLISECONDS) }
@@ -129,12 +132,12 @@ object Common {
     }
   }
 
-  def timeoutOpt[R](millis: Long, status: Option[String] = None)(action: => R)(implicit context: LogContext): Option[R] = {
+  def timeoutOpt[R](millis: Long, status: Option[String] = None)(action: => R)(implicit context: LogContext = CommonLogContext): Option[R] = {
     try { Some(timeout(millis, status)(action)) }
     catch { case _: TimeoutException => None }
   }
 
-  def timeoutWithReporter[R](millis: Long)(action: ProcessReporter => R)(implicit context: LogContext): R = {
+  def timeoutWithReporter[R](millis: Long)(action: ProcessReporter => R)(implicit context: LogContext = CommonLogContext): R = {
     val reporter = new ProcessReporter
     if (millis < 0) return action(reporter)
     val thread = ConcurrencyUtil.thread(useExecutionContext = false)(action(reporter))
@@ -171,7 +174,7 @@ object Common {
           throw e
       }
     }
-    throw new RuntimeException("this can/should never happen")
+    unreachable
   }
 
   def touch[A](a: A)(touch: A => Unit): A = {
@@ -189,7 +192,28 @@ object Common {
     try {
       action
     } finally {
-      file.delete()
+      IOUtil.delete(file)
     }
+  }
+
+  def synchronizedIf[R](obj: AnyRef, condition: => Boolean, sleep: => Unit = Thread.`yield`())(action: => R): R = {
+    while (true) {
+      obj.synchronized {
+        if (condition) return action
+      }
+      sleep
+    }
+    unreachable
+  }
+
+  def infinite[R](action: => Unit): R = {
+    while (true) {
+      action
+    }
+    unreachable
+  }
+
+  def unreachable[R]: R = {
+    throw new RuntimeException("this can/should never be reached")
   }
 }

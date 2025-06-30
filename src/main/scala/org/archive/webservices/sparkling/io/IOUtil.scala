@@ -36,6 +36,15 @@ object IOUtil {
     file
   }
 
+  def delete(path: String): Unit = delete(new File(path))
+
+  def delete(file: File): Unit = {
+    while (file.exists()) {
+      val success = Common.tryCatch(file.delete()).getOrElse(false)
+      if (!success) Thread.`yield`()
+    }
+  }
+
   def copy(in: InputStream, out: OutputStream, length: Long = -1): Unit = { if (length < 0) IOUtils.copy(in, out) else IOUtils.copy(new BoundedInputStream(in, length), out) }
 
   def copyToBuffer(in: InputStream, length: Long = -1, bufferSize: Int = memoryBuffer): ManagedVal[ValueSupplier[InputStream]] = buffer(bufferSize, lazyEval = false) { buffer =>
