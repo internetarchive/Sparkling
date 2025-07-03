@@ -1,7 +1,7 @@
 package org.archive.webservices.sparkling.http
 
 import java.io.{BufferedInputStream, IOException, InputStream}
-import java.net.{HttpURLConnection, URL, URLConnection}
+import java.net.{HttpURLConnection, URI, URL, URLConnection}
 import org.archive.webservices.sparkling.io.CleanupInputStream
 import org.archive.webservices.sparkling.logging.{Log, LogContext}
 import org.archive.webservices.sparkling.util.Common
@@ -122,6 +122,9 @@ object HttpClient {
           Log.info(s"Detected redirect for $descriptor, status: $status...")
           connection.getHeaderFields.asScala.filter(_._1 != null).find(_._1.toLowerCase == "location").flatMap {
             _._2.asScala.find(_ != null)
+          }.map { path =>
+            if (path.matches("^https?://.+$")) path
+            else connection.getURL.toURI.resolve(path).toString
           }
         } else if (retryOnHttpError && status / 100 > 2) {
           throw new IOException(s"Unsuccessful status code for $descriptor: $status")
