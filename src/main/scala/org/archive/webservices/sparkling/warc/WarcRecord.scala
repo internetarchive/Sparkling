@@ -1,14 +1,13 @@
 package org.archive.webservices.sparkling.warc
 
 import java.io.InputStream
-
 import org.apache.commons.io.input.BoundedInputStream
 import org.archive.webservices.sparkling.cdx.CdxRecord
 import org.archive.webservices.sparkling.compression.{Compression, DecompressionContext, Gzip, Zstd}
 import org.archive.webservices.sparkling.http.HttpMessage
 import org.archive.webservices.sparkling.io.IOUtil
 import org.archive.webservices.sparkling.logging.LogContext
-import org.archive.webservices.sparkling.util.{DigestUtil, RegexUtil, StringUtil, SurtUtil}
+import org.archive.webservices.sparkling.util.{Common, DigestUtil, RegexUtil, StringUtil, SurtUtil}
 
 import scala.util.Try
 
@@ -27,10 +26,7 @@ class WarcRecord(val versionStr: String, val headers: Seq[(String, String)], val
   def isResponse: Boolean = warcType.contains("response")
 
   lazy val payload: InputStream = IOUtil.supportMark(contentLength match {
-    case Some(length) =>
-      val bounded = new BoundedInputStream(in, length)
-      bounded.setPropagateClose(false)
-      bounded
+    case Some(length) => Common.touch(new BoundedInputStream(in, length))(_.setPropagateClose(false))
     case None => in
   })
 
