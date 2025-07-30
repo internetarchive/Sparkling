@@ -10,9 +10,9 @@ object RegexUtil {
   lazy val urlStartPattern: Regex = r("[a-z]+\\:.*")
   lazy val noWordCharacterPattern: Regex = r("[^\\p{L}\\p{M}]+")
   lazy val oneLineSpacePattern: Regex = r("\\s+")
-  lazy val newLineSpacePattern: Regex = "\\s*?\\n(\\s*)|\\s+".r
+  lazy val newLineSpacePattern: Regex = r("\\s*?\\n(\\s*)|\\s+")
   lazy val tokenDelimiterPattern: Regex = r("[^\\p{L}\\p{M}0-9]+")
-  lazy val nonLatinPattern: Regex = r("[^\\p{IsLatin}0-9\\s.,!?'\"()-]+")
+  lazy val nonLatinPattern: Regex = r("[^\\p{IsLatin}0-9\\s\\n\\.\\,\\!\\?\'\"\\(\\)\\-\\&\\;]+")
 
   def matchesAbsoluteUrlStart(url: String): Boolean = urlStartPattern.pattern.matcher(url.toLowerCase).matches
   def oneValidWordCharacter(str: String): Boolean = str.nonEmpty && !noWordCharacterPattern.pattern.matcher(str).matches
@@ -29,7 +29,7 @@ object RegexUtil {
     if (maxWordLength < 0) str else r(s"\\S{$maxWordLength,}").replaceAllIn(str, "")
   }
   def cleanLatin(str: String, stripSpaces: Boolean = true, maxWordLength: Int = 100): String = {
-    val clean = nonLatinPattern.replaceAllIn(removeLongWords(str, maxWordLength), "").trim
+    val clean = nonLatinPattern.replaceAllIn(removeLongWords(str, maxWordLength), " ").trim
     if (stripSpaces) newLineSpaceTrim(clean) else clean
   }
 
