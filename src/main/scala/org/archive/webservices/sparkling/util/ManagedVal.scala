@@ -1,5 +1,7 @@
 package org.archive.webservices.sparkling.util
 
+import org.archive.webservices.sparkling.indexed.{BasicSortedPrefixSeq, SortedPrefixSeq}
+
 import scala.util.Try
 
 class ManagedVal[A] private (create: => A, cleanup: Either[Exception, A] => Unit = (_: Either[Exception, A]) => {}, val lazyEval: Boolean = true) {
@@ -16,7 +18,7 @@ class ManagedVal[A] private (create: => A, cleanup: Either[Exception, A] => Unit
     value = Some {
       try {
         val right = Right(create)
-        SparkUtil.cleanupTask(this, () => clear(false))
+//        SparkUtil.cleanupTask(this, () => clear(false))
         right
       } catch {
         case e: Exception =>
@@ -45,7 +47,9 @@ class ManagedVal[A] private (create: => A, cleanup: Either[Exception, A] => Unit
       value = None
       cleanup(either)
     } catch { case e: Exception => if (throwOnError) throw e }
-    finally { SparkUtil.removeTaskCleanup(this) }
+    finally {
+//      SparkUtil.removeTaskCleanup(this)
+    }
 
   def apply[R](action: A => R, throwOnClearError: Boolean = false): R =
     try { action(get) }
@@ -91,4 +95,6 @@ class ManagedVal[A] private (create: => A, cleanup: Either[Exception, A] => Unit
 
 object ManagedVal {
   def apply[A](create: => A, cleanup: Either[Exception, A] => Unit = (_: Either[Exception, A]) => {}, lazyEval: Boolean = true): ManagedVal[A] = new ManagedVal[A](create, cleanup, lazyEval)
+
+  implicit def toVal[A](managed: ManagedVal[A]): A = managed.get
 }

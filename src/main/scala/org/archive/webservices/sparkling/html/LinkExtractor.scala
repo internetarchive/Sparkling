@@ -131,13 +131,13 @@ object LinkExtractor {
     val doubleQuoted = Iterator.continually {
       prevDoubleQuote = script.indexOf('"', prevDoubleQuote + 1)
       prevDoubleQuote
-    }.takeWhile(_ != -1).sliding(2).map{case Seq(a,b) => script.substring(a + 1, b)}.filter(_.length > 2)
+    }.takeWhile(_ != -1).sliding(2).filter(_.length == 2).map{case Seq(a,b) => script.substring(a + 1, b)}.filter(_.length > 2)
 
     var prevSingleQuote = -1
     val singleQuoted = Iterator.continually {
       prevSingleQuote = script.indexOf('\'', prevSingleQuote + 1)
       prevSingleQuote
-    }.takeWhile(_ != -1).sliding(2).map{case Seq(a,b) => script.substring(a + 1, b)}.filter(_.length > 2)
+    }.takeWhile(_ != -1).sliding(2).filter(_.length == 2).map{case Seq(a,b) => script.substring(a + 1, b)}.filter(_.length > 2)
 
     for (candidate <- doubleQuoted ++ singleQuoted) yield {
       if (candidate.contains(" ")) None

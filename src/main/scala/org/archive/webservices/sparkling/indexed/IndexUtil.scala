@@ -11,20 +11,22 @@ object IndexUtil {
 
   def filter(lines: TraversableOnce[String], sortedPrefixes: MultiBufferedIterator[String]): Iterator[(String, String)] = StringUtil.matchPrefixes(lines, sortedPrefixes, strict = false)
 
-  def lineCandidates(index: TraversableOnce[String], prefixes: Set[String]): Iterator[(String, Int)] = lineCandidates(index, SortedPrefixSeq.fromSet(prefixes))
+  def lineCandidates(index: TraversableOnce[String], prefixes: Set[String], nextFileFirstLine: Option[String] = None): Iterator[(String, Int)] = lineCandidates(index, SortedPrefixSeq.fromSet(prefixes), nextFileFirstLine)
 
-  def lineCandidates(index: TraversableOnce[String], sortedPrefixes: SortedPrefixSeq): Iterator[(String, Int)] = {
+  def lineCandidates(index: TraversableOnce[String], sortedPrefixes: SortedPrefixSeq, nextFileFirstLine: Option[String]): Iterator[(String, Int)] = {
     val buffered = IteratorUtil.zipNext(index.toIterator).buffered
     if (buffered.hasNext) {
-      var candidates = sortedPrefixes.fromWithIndex(buffered.head._1).buffered
-      IteratorUtil.whileDefined(buffered.map { case (line, next) =>
-        IteratorUtil.dropWhile(candidates) { case (prefix, _) => prefix < line && !line.startsWith(prefix) }
-        if (candidates.hasNext) Some({
-          val (prefix, idx) = candidates.head
-          if (next.isEmpty || next.get >= prefix) Some(line, idx) else None
-        })
-        else None
-      }).flatten
+      val candidates = sortedPrefixes.fromWithIndex(buffered.head._1).buffered
+      if (nextFileFirstLine.isDefined) IteratorUtil.takeWhile(candidates) { case (prefix, _) => nextFileFirstLine.exists(_ >= prefix) }
+      if (candidates.hasNext) {
+        IteratorUtil.whileDefined(buffered.map { case (line, next) =>
+          IteratorUtil.dropWhile(candidates) { case (prefix, _) => prefix < line && !line.startsWith(prefix) }
+          if (candidates.hasNext) {
+            val (prefix, idx) = candidates.head
+            Some(if (next.orElse(nextFileFirstLine).isEmpty || next.orElse(nextFileFirstLine).get >= prefix) Some(line, idx) else None)
+          } else None
+        }).flatten
+      } else Iterator.empty
     } else Iterator.empty
   }
 

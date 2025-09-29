@@ -6,16 +6,16 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 import org.archive.webservices.sparkling.AccessContext
 import org.archive.webservices.sparkling.io.{HdfsIO, IOUtil}
-import org.archive.webservices.sparkling.util.{CleanupIterator, IteratorUtil, MultiBufferedIterator, RddUtil}
+import org.archive.webservices.sparkling.util.{CleanupIterator, IteratorUtil, ManagedVal, MultiBufferedIterator, RddUtil}
 
-import java.io.{InputStream, Serializable}
+import java.io.InputStream
 import scala.reflect.ClassTag
 import scala.util.Try
 
 object PrefixIndexLoader {
   import org.archive.webservices.sparkling.Sparkling._
 
-  val DefaultMergePointers = 100
+  val DefaultMergePointers = 10
 
 //  sc.getConf.registerKryoClasses(Array(
 //    classOf[PositionPointer],
@@ -25,7 +25,7 @@ object PrefixIndexLoader {
 //    classOf[HdfsSortedPrefixSeq]
 //  ))
 
-  private def loadIndexWithPrefixesBroadcast(
+  def loadIndexWithPrefixesBroadcast(
       path: String,
       prefixBroadcast: Broadcast[SortedPrefixSeq],
       getFileOffsetLength: String => (String, Long, Long),
@@ -35,25 +35,55 @@ object PrefixIndexLoader {
       sorted: Boolean = false,
       cache: Boolean = true,
       linesPerPartition: Int = -1
-  )(implicit accessContext: AccessContext = AccessContext.default): RDD[RecordPointer] = {
-    val rdd = (if (linesPerPartition > 0) { RddUtil.loadTextPartitionsByLinesWithFilenames(path, linesPerPartition = linesPerPartition) }
-               else { RddUtil.loadBinary(path, decompress = false, close = false, sorted = sorted) { (indexFile, in) => Iterator((indexFile, IteratorUtil.cleanup(IOUtil.lines(in), in.close))) } })
-      .coalesce(parallelism).flatMap { case (indexFile, lines) =>
-        lines.chain { l =>
-          val pointers = IndexUtil.lineCandidates(l, prefixBroadcast.value).flatMap { case (line, prefixStart) =>
-            Try {
-              val (file, offset, length) = getFileOffsetLength(line)
-              val filePath = new Path(new Path(indexFile, ".."), file).toString
-              RecordPointer(filePath, PositionPointer(offset, length), prefixStart)
-            }.toOption
+  )(implicit accessContext: AccessContext = AccessContext.default): ManagedVal[RDD[RecordPointer]] = {
+    var firstLinesBroadcast: Option[Broadcast[Array[(String, String)]]] = None
+    var numFiles = 1
+    ManagedVal({
+      val rdd = (if (linesPerPartition > 0) {
+        RddUtil.loadTextPartitionsByLinesWithFilenames(path, linesPerPartition = linesPerPartition)
+      } else {
+        val firstLines = RddUtil.loadBinary(path) { (indexFile, in) =>
+          val lines = IOUtil.lines(in)
+          if (lines.hasNext) Some((indexFile, lines.next)) else None
+        }.coalesce(parallelism).collect.sortBy(_._1)
+
+        val firstLinesBuffered = IteratorUtil.zipNext(firstLines.toIterator).buffered
+        val prefixes = prefixBroadcast.value.iter
+        val relevantFiles = if (firstLinesBuffered.hasNext) {
+          IteratorUtil.whileDefined(firstLinesBuffered.map { case ((file, line), next) =>
+            IteratorUtil.dropWhile(prefixes) { prefix => prefix < line && !line.startsWith(prefix) }
+            if (prefixes.hasNext) {
+              Some(if (next.isEmpty || next.get._2 >= prefixes.head) Some(file) else None)
+            } else None
+          }).flatten.toSet
+        } else Set.empty[String]
+
+        numFiles = relevantFiles.size
+
+        firstLinesBroadcast = Some(sc.broadcast(firstLines))
+
+        RddUtil.loadFilesLocality(path).filter(f => relevantFiles.contains(f)).map(f => (f, HdfsIO.iterLines(f)))
+      }).coalesce(parallelism).flatMap { case (indexFile, lines) =>
+          val nextFileFirstLine = firstLinesBroadcast.flatMap(_.value.dropWhile(_._1 <= indexFile).headOption.map(_._2))
+          lines.chain { l =>
+            val pointers = IndexUtil.lineCandidates(l, prefixBroadcast.value, nextFileFirstLine).flatMap { case (line, prefixStart) =>
+              Try {
+                val (file, offset, length) = getFileOffsetLength(line)
+                val filePath = new Path(new Path(indexFile, ".."), file).toString
+                RecordPointer(filePath, PositionPointer(offset, length), prefixStart)
+              }.toOption
+            }
+            IndexUtil.mergeRecordPointers(pointers, mergePointers * numFiles, mergeTolerance, groupByPrefix)
           }
-          IndexUtil.mergeRecordPointers(pointers, mergePointers, mergeTolerance, groupByPrefix)
         }
-      }
-    if (cache) rdd.persist(StorageLevel.MEMORY_AND_DISK) else rdd
+      if (cache) rdd.persist(StorageLevel.MEMORY_AND_DISK) else rdd
+    }, _ => {
+      for (b <- firstLinesBroadcast) b.unpersist()
+    })
   }
 
-  def loadIndex(path: String, prefixes: SortedPrefixSeq, getFileOffsetLength: String => (String, Long, Long), mergePointers: Int, sorted: Boolean = false)(implicit accessContext: AccessContext = AccessContext.default): RDD[RecordPointer] = {
+  def loadIndex(path: String, prefixes: SortedPrefixSeq, getFileOffsetLength: String => (String, Long, Long), mergePointers: Int, sorted: Boolean = false)
+               (implicit accessContext: AccessContext = AccessContext.default): ManagedVal[RDD[RecordPointer]] = {
     loadIndex(path, prefixes, getFileOffsetLength, if (mergePointers == 0) DefaultMergePointers else mergePointers, HdfsIO.fs.getDefaultBlockSize(new Path(path)), sorted)
   }
 
@@ -64,7 +94,10 @@ object PrefixIndexLoader {
       mergePointers: Int,
       mergeTolerance: Long,
       sorted: Boolean
-  )(implicit accessContext: AccessContext): RDD[RecordPointer] = { loadIndexWithPrefixesBroadcast(path, sc.broadcast(prefixes), getFileOffsetLength, mergePointers, mergeTolerance, sorted) }
+  )(implicit accessContext: AccessContext): ManagedVal[RDD[RecordPointer]] = {
+    val prefixBroadcast = sc.broadcast(prefixes)
+    loadIndexWithPrefixesBroadcast(path, prefixBroadcast, getFileOffsetLength, mergePointers, mergeTolerance, sorted).map(identity, _ => prefixBroadcast.unpersist())
+  }
 
   def loadTextLinesFromIndex(
       indexPath: String,
@@ -77,9 +110,9 @@ object PrefixIndexLoader {
       cache: Boolean = false,
       shuffle: Boolean = true,
       indexLinesPerPartition: Int = -1
-  )(implicit accessContext: AccessContext = AccessContext.default): RDD[String] = {
+  )(implicit accessContext: AccessContext = AccessContext.default): ManagedVal[RDD[String]] = {
     val prefixBroadcast = sc.broadcast(prefixes)
-    val index = loadIndexWithPrefixesBroadcast(
+    loadIndexWithPrefixesBroadcast(
       indexPath,
       prefixBroadcast,
       getFileOffsetLength,
@@ -88,19 +121,24 @@ object PrefixIndexLoader {
       sorted = sorted,
       cache = cache,
       linesPerPartition = indexLinesPerPartition
-    )
-    val repartitioned =
-      if (repartition > 0) {
-        if (shuffle) RddUtil.shuffle(index, repartition)
-        else {
-          if (indexLinesPerPartition > 0) { index.coalesce(repartition) }
-          else { index.repartition(repartition) }
-        }
-      } else index
-    repartitioned.flatMap { pointer =>
-      val in = HdfsIO.open(pointer.path, pointer.position.offset, pointer.position.length)
-      IteratorUtil.cleanup(IndexUtil.filter(IOUtil.lines(in), MultiBufferedIterator(prefixBroadcast.value.drop(pointer.prefixIdx))).map(_._1).filter(filter), in.close)
-    }
+    ).map({ index =>
+      val repartitioned =
+        if (repartition > 0) {
+          if (shuffle) RddUtil.shuffle(index, repartition)
+          else {
+            if (indexLinesPerPartition > 0) {
+              index.coalesce(repartition)
+            }
+            else {
+              index.repartition(repartition)
+            }
+          }
+        } else index
+      repartitioned.flatMap { pointer =>
+        val in = HdfsIO.open(pointer.path, pointer.position.offset, pointer.position.length)
+        IteratorUtil.cleanup(IndexUtil.filter(IOUtil.lines(in), MultiBufferedIterator(prefixBroadcast.value.drop(pointer.prefixIdx))).map(_._1).filter(filter), in.close)
+      }
+    }, _ => prefixBroadcast.unpersist())
   }
 
   def loadBinary[D: ClassTag](
@@ -110,7 +148,10 @@ object PrefixIndexLoader {
       getOffsetLength: String => (Long, Long),
       load: Iterator[InputStream] => Iterator[D],
       sorted: Boolean = false
-  )(implicit accessContext: AccessContext = AccessContext.default): RDD[D] = { loadBinaryWithPrefixBroadcast(path, sc.broadcast(prefixes), getIndexPath, getOffsetLength, load, sorted = sorted) }
+  )(implicit accessContext: AccessContext = AccessContext.default): ManagedVal[RDD[D]] = {
+    lazy val prefixBroadcast = sc.broadcast(prefixes)
+    ManagedVal(loadBinaryWithPrefixBroadcast(path, prefixBroadcast, getIndexPath, getOffsetLength, load, sorted = sorted), _ => prefixBroadcast.unpersist())
+  }
 
   def loadBinaryWithPrefixBroadcast[D: ClassTag](
       path: String,
@@ -137,9 +178,9 @@ object PrefixIndexLoader {
       getOffsetLength: String => (Long, Long),
       filter: String => Boolean = _ => true,
       sorted: Boolean = false
-  )(implicit accessContext: AccessContext = AccessContext.default): RDD[String] = {
-    val prefixBroadcast = sc.broadcast(prefixes)
-    loadBinaryWithPrefixBroadcast(
+  )(implicit accessContext: AccessContext = AccessContext.default): ManagedVal[RDD[String]] = {
+    lazy val prefixBroadcast = sc.broadcast(prefixes)
+    ManagedVal(loadBinaryWithPrefixBroadcast(
       path,
       prefixBroadcast,
       getIndexPath,
@@ -155,7 +196,7 @@ object PrefixIndexLoader {
         }
       },
       sorted = sorted
-    )
+    ), _ => prefixBroadcast.unpersist())
   }
 
   def loadTextLinesGroupedByPrefixFromIndex[D: ClassTag](
@@ -172,11 +213,13 @@ object PrefixIndexLoader {
       dataPath: Option[String] = None,
       shuffle: Boolean = true,
       indexLinesPerPartition: Int = -1
-  )(implicit accessContext: AccessContext = AccessContext.default): RDD[(String, Iterator[String])] = {
+  )(implicit accessContext: AccessContext = AccessContext.default): ManagedVal[RDD[(String, Iterator[String])]] = {
     def groupKey(prefix: String, line: String)(implicit accessContext: AccessContext = AccessContext.default): String = Try(getPrefix(prefix, line)).getOrElse(line)
 
-    val prefixBroadcast = sc.broadcast(prefixes)
-    val index = loadIndexWithPrefixesBroadcast(
+    lazy val prefixBroadcast = sc.broadcast(prefixes)
+    var filesBroadcast: Option[Broadcast[Seq[String]]] = None
+
+    loadIndexWithPrefixesBroadcast(
       indexPath,
       prefixBroadcast,
       getFileOffsetLength,
@@ -186,67 +229,77 @@ object PrefixIndexLoader {
       sorted = sorted,
       cache = cache,
       linesPerPartition = indexLinesPerPartition
-    )
+    ).map({ index =>
+      val prefixBc = prefixBroadcast
 
-    val files = dataPath.map(HdfsIO.files(_)).getOrElse(RddUtil.collectDistinct(RddUtil.distinctSorted(index.map(_.path)))).toSeq.sorted
-    val filesBroadcast = sc.broadcast(files)
+      val files = dataPath.map(HdfsIO.files(_)).getOrElse(RddUtil.collectDistinct(RddUtil.distinctSorted(index.map(_.path)))).toSeq.sorted
+      filesBroadcast = Some(sc.broadcast(files))
 
-    val repartitioned =
-      if (repartition > 0) {
-        if (shuffle) RddUtil.shuffle(index, repartition)
-        else {
-          if (indexLinesPerPartition > 0) { index.coalesce(repartition) }
-          else { index.repartition(repartition) }
-        }
-      } else index
-    repartitioned.flatMap { pointer =>
-      val files = filesBroadcast.value
-      val filePath = pointer.path
-      val fileIdx = files.indexOf(filePath)
-      prefixBroadcast.value.drop(pointer.prefixIdx).chain { p =>
-        if (fileIdx < 0 || !p.hasNext) Iterator.empty
-        else {
-          val prefixes = MultiBufferedIterator(p)
-          val in = HdfsIO.open(filePath, offset = pointer.position.offset, length = pointer.position.length, decompress = false)
-
-          val lines = IteratorUtil.cleanup(IOUtil.lines(in, Some(filePath)), in.close)
-
-          val overLines = CleanupIterator.lazyIter {
-            val in = HdfsIO.open(filePath, offset = pointer.position.offset + pointer.position.length)
-            CleanupIterator.combine(
-              IteratorUtil.cleanup(IOUtil.lines(in), in.close),
-              CleanupIterator.flatten(files.drop(fileIdx + 1).toIterator.map { file =>
-                val in = HdfsIO.open(file)
-                IteratorUtil.cleanup(IOUtil.lines(in), in.close)
-              })
-            )
-          }
-
-          var firstLine = lines.headOption
-          val relevant =
-            (IndexUtil.filter(lines, prefixes) ++ IteratorUtil.lazyIter {
-              if (overLines.hasNext) overLines.chain { lines =>
-                val overLine = lines.head
-                if (firstLine.isEmpty) firstLine = Some(overLine)
-                IteratorUtil.dropWhile(prefixes)(p => p < overLine && !overLine.startsWith(p))
-                if (prefixes.hasNext && overLine.startsWith(prefixes.head)) {
-                  val prefix = prefixes.head
-                  val group = groupKey(prefix, overLine)
-                  IteratorUtil.takeWhile(lines)(l => l.startsWith(prefix) && groupKey(prefix, l) == group).map((_, prefix))
-                } else Iterator.empty
-              }
-              else Iterator.empty
-            }).buffered
-
-          if (relevant.hasNext) {
-            val skipFirst = (fileIdx > 0 || pointer.position.offset > 0) && relevant.head._1 == firstLine.get
-            val grouped = IteratorUtil.groupSortedBy(relevant.filter { case (line, prefix) => filter(line) }) { case (line, prefix) => groupKey(prefix, line) }.map { case (group, records) =>
-              group -> records.map(_._1)
+      val repartitioned =
+        if (repartition > 0) {
+          if (shuffle) RddUtil.shuffle(index, repartition)
+          else {
+            if (indexLinesPerPartition > 0) {
+              index.coalesce(repartition)
             }
-            if (skipFirst) grouped.drop(1) else grouped
-          } else Iterator.empty
+            else {
+              index.repartition(repartition)
+            }
+          }
+        } else index
+
+      repartitioned.flatMap { pointer =>
+        val files = filesBroadcast.get.value
+        val filePath = pointer.path
+        val fileIdx = files.indexOf(filePath)
+        prefixBc.value.drop(pointer.prefixIdx).chain { p =>
+          if (fileIdx < 0 || !p.hasNext) Iterator.empty
+          else {
+            val prefixes = MultiBufferedIterator(p)
+            val in = HdfsIO.open(filePath, offset = pointer.position.offset, length = pointer.position.length, decompress = false)
+
+            val lines = IteratorUtil.cleanup(IOUtil.lines(in, Some(filePath)), in.close)
+
+            val overLines = CleanupIterator.lazyIter {
+              val in = HdfsIO.open(filePath, offset = pointer.position.offset + pointer.position.length)
+              CleanupIterator.combine(
+                IteratorUtil.cleanup(IOUtil.lines(in), in.close),
+                CleanupIterator.flatten(files.drop(fileIdx + 1).toIterator.map { file =>
+                  val in = HdfsIO.open(file)
+                  IteratorUtil.cleanup(IOUtil.lines(in), in.close)
+                })
+              )
+            }
+
+            var firstLine = lines.headOption
+            val relevant =
+              (IndexUtil.filter(lines, prefixes) ++ IteratorUtil.lazyIter {
+                if (overLines.hasNext) overLines.chain { lines =>
+                  val overLine = lines.head
+                  if (firstLine.isEmpty) firstLine = Some(overLine)
+                  IteratorUtil.dropWhile(prefixes)(p => p < overLine && !overLine.startsWith(p))
+                  if (prefixes.hasNext && overLine.startsWith(prefixes.head)) {
+                    val prefix = prefixes.head
+                    val group = groupKey(prefix, overLine)
+                    IteratorUtil.takeWhile(lines)(l => l.startsWith(prefix) && groupKey(prefix, l) == group).map((_, prefix))
+                  } else Iterator.empty
+                }
+                else Iterator.empty
+              }).buffered
+
+            if (relevant.hasNext) {
+              val skipFirst = (fileIdx > 0 || pointer.position.offset > 0) && relevant.head._1 == firstLine.get
+              val grouped = IteratorUtil.groupSortedBy(relevant.filter { case (line, prefix) => filter(line) }) { case (line, prefix) => groupKey(prefix, line) }.map { case (group, records) =>
+                group -> records.map(_._1)
+              }
+              if (skipFirst) grouped.drop(1) else grouped
+            } else Iterator.empty
+          }
         }
       }
-    }
+    }, _ => {
+      prefixBroadcast.unpersist()
+      for (b <- filesBroadcast) b.unpersist()
+    })
   }
 }

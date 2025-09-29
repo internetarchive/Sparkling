@@ -36,7 +36,7 @@ class CleanupIterator[A] private (iter: Iterator[A], cleanup: () => Unit, throwO
       finally {
         headValue = None
         cleanedUp = true
-        SparkUtil.removeTaskCleanup(this)
+//        SparkUtil.removeTaskCleanup(this)
       }
   }
 
@@ -75,7 +75,7 @@ class CleanupIterator[A] private (iter: Iterator[A], cleanup: () => Unit, throwO
 object CleanupIterator {
   def apply[A](iter: Iterator[A], cleanup: () => Unit, throwOnError: Boolean = false): CleanupIterator[A] = {
     val cleanupIter = new CleanupIterator(iter, cleanup, throwOnError)
-    SparkUtil.cleanupTask(cleanupIter, () => cleanupIter.clear(false))
+    //SparkUtil.cleanupTask(cleanupIter, () => cleanupIter.clear(false))
     cleanupIter
   }
 

@@ -39,15 +39,25 @@ class WarcRecord(val versionStr: String, val headers: Seq[(String, String)], val
 
   def toCdx(
       compressedSize: Long,
-      digest: InputStream => String = s => payloadDigest.getOrElse(defaultDigestHash(s)),
+      digest: InputStream => String = defaultDigestHash,
       handleRevisits: Boolean = true,
-      handleOthers: Boolean = false
+      handleOthers: Boolean = false,
+      digestStr: Option[String] = payloadDigest
   ): Option[CdxRecord] = {
     if (isResponse || (handleRevisits && isRevisit) || handleOthers) url.map(SurtUtil.fromUrl).map { surt =>
       val mime = if (isResponse) http.flatMap(_.mime).getOrElse("-") else warcType.map("warc/" + _).getOrElse("-")
       val status = http.map(_.status).getOrElse(-1)
       val redirectUrl = http.flatMap(_.redirectLocation).getOrElse("-")
-      CdxRecord(surt, timestamp.getOrElse("-"), url.getOrElse("-"), mime, status, digestPayload(digest), redirectUrl, "-", compressedSize)
+      CdxRecord(
+        surt,
+        timestamp.getOrElse("-"),
+        url.getOrElse("-"),
+        mime,
+        status,
+        digestStr.getOrElse(digestPayload(digest)),
+        redirectUrl,
+        "-",
+        compressedSize)
     }
     else None
   }

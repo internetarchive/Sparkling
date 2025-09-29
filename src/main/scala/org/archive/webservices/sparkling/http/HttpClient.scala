@@ -1,5 +1,7 @@
 package org.archive.webservices.sparkling.http
 
+import org.apache.commons.io.input.BoundedInputStream
+
 import java.io.{BufferedInputStream, IOException, InputStream}
 import java.net.{HttpURLConnection, URI, URL, URLConnection}
 import org.archive.webservices.sparkling.io.CleanupInputStream
@@ -37,7 +39,8 @@ object HttpClient {
   )(action: InputStream => R): R = {
     rangeRequestConnection(url, headers, offset, length, retries, sleepMillis, timeoutMillis, disconnect = false) { case connection: HttpURLConnection =>
       val stream = Common.timeout(timeoutMillis)(connection.getInputStream)
-      val in = new BufferedInputStream(new CleanupInputStream(stream, connection.disconnect))
+      val bounded = if (length < 0) stream else new BoundedInputStream(stream, length)
+      val in = new BufferedInputStream(new CleanupInputStream(bounded, connection.disconnect))
       Common.cleanup(action(in))(() => if (close) in.close())
     }
   }
@@ -67,7 +70,8 @@ object HttpClient {
   )(action: HttpMessage => R): R = {
     rangeRequestConnection(url, headers, offset, length, retries, sleepMillis, timeoutMillis, disconnect = false, retryOnHttpError = retryOnHttpError) { case connection: HttpURLConnection =>
       val stream = Common.timeout(timeoutMillis)(connection.getInputStream)
-      val in = new BufferedInputStream(new CleanupInputStream(stream, connection.disconnect))
+      val bounded = if (length < 0) stream else new BoundedInputStream(stream, length)
+      val in = new BufferedInputStream(new CleanupInputStream(bounded, connection.disconnect))
       Common.cleanup({
         val responseHeaders = connection.getHeaderFields.asScala.toSeq.flatMap { case (k, v) => v.asScala.map((if (k == null) "" else k) -> _) }
         val message = new HttpMessage(connection.getHeaderField(0), responseHeaders, in)

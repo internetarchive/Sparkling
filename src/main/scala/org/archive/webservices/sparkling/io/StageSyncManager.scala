@@ -47,11 +47,21 @@ object StageSyncManager {
   }
 
   def launchDetachableShell(proc: SystemProcess): Int = proc.synchronized {
-    val tmpSesId = "bash" + Instant.now.toEpochMilli
-    proc.exec("tmux -f /dev/null new-session -d -s " + tmpSesId + " '/bin/bash -c \"exec bash\"' \\; display-message -p -t " + tmpSesId + ":0 '#{pane_pid}'")
+    val detach = !Sparkling.sc.isLocal
+    // run
+    if (detach) {
+      val tmpSesId = "bash" + Instant.now.toEpochMilli
+      proc.exec("tmux -f /dev/null new-session -d -s " + tmpSesId + " '/bin/bash -c \"exec bash\"' \\; display-message -p -t " + tmpSesId + ":0 '#{pane_pid}'")
+    } else {
+      proc.exec("/bin/bash")
+      proc.exec("echo $$")
+    }
     val pid = proc.readAllInput().mkString.trim.toInt
-    proc.exec(s"kill -STOP $pid; reptyr -T $pid 2>/dev/null; kill -CONT $pid")
-    proc.demandLine("echo $$", pid.toString)
+    // detach
+    if (detach) {
+      proc.exec(s"kill -STOP $pid; reptyr -T $pid 2>/dev/null; kill -CONT $pid")
+      proc.demandLine("echo $$", pid.toString)
+    }
     proc.consumeAllInput()
     pid
   }

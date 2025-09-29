@@ -2,14 +2,13 @@ package org.archive.webservices.sparkling
 
 import java.io.File
 import java.util.concurrent.Executors
-
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.rdd.RDD
 import org.apache.spark.{SparkContext, TaskContext}
 import org.archive.webservices.sparkling.cdx.CdxRecord
 import org.archive.webservices.sparkling.http.HttpMessage
 import org.archive.webservices.sparkling.io.{FileOutputPool, HdfsIO, TypedInOut}
-import org.archive.webservices.sparkling.util.{CollectionUtil, RddUtil, StringUtil}
+import org.archive.webservices.sparkling.util.{CollectionUtil, RddUtil, SparkUtil, StringUtil}
 import org.archive.webservices.sparkling.warc.WarcRecord
 
 import scala.collection.mutable
@@ -123,7 +122,7 @@ object Sparkling {
   def sc: SparkContext = scOpt match {
     case Some(sc) => sc
     case None =>
-      val sc = SparkContext.getOrCreate
+      val sc = SparkUtil.currentContext.getOrElse(SparkContext.getOrCreate)
       sc.getConf.registerKryoClasses(Array(
         classOf[CdxRecord],
         classOf[WarcRecord],

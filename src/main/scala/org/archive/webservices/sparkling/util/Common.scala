@@ -3,7 +3,9 @@ package org.archive.webservices.sparkling.util
 import org.archive.webservices.sparkling.io.IOUtil
 import org.archive.webservices.sparkling.logging.{Log, LogContext}
 
-import java.io.File
+import java.io.{File, PrintStream, PrintWriter, StringWriter}
+import java.nio.channels.FileChannel
+import java.nio.file.StandardOpenOption
 import java.util.concurrent.{TimeUnit, TimeoutException}
 import scala.util.Try
 
@@ -187,23 +189,47 @@ object Common {
   def sync[R](file: String)(action: => R): R = sync(new File(file))(action)
 
   def sync[R](file: File)(action: => R): R = {
-    while (!file.createNewFile()) Thread.`yield`()
-    file.deleteOnExit()
     try {
-      action
+      infinite {
+        val channel = FileChannel.open(file.toPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE)
+        try {
+          val lock = channel.tryLock()
+          if (lock != null) {
+            try {
+              return action
+            } finally {
+              lock.release()
+            }
+          }
+        } finally {
+          channel.close()
+        }
+      }
     } finally {
       IOUtil.delete(file)
     }
   }
 
   def synchronizedIf[R](obj: AnyRef, condition: => Boolean, sleep: => Unit = Thread.`yield`())(action: => R): R = {
-    while (true) {
+    infinite {
       obj.synchronized {
         if (condition) return action
       }
       sleep
     }
     unreachable
+  }
+
+  def printStackTrace(print: Array[String] => Unit = _.foreach(println)): Unit = {
+    try {
+      throw new RuntimeException
+    } catch {
+      case e: RuntimeException =>
+        val sw = new StringWriter
+        val pw = new PrintWriter(sw)
+        e.printStackTrace(pw)
+        print(sw.toString.split('\n').map(_.trim))
+    }
   }
 
   def infinite[R](action: => Unit): R = {

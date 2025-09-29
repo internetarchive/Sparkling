@@ -28,7 +28,7 @@ object CdxRecord {
         split.drop(9)
       ))
     } catch { case e: Exception =>
-      e.printStackTrace()
+//      e.printStackTrace()
       None
     }
   }

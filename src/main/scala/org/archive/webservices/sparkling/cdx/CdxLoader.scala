@@ -93,7 +93,7 @@ object CdxLoader {
       val filePrefix = StringUtil.stripSuffixes(new Path(file).getName, GzipExt)
       val cdxPath = new Path(outPath.getOrElse(new Path(file).getParent.toString), filePrefix + CdxExt + GzipExt).toString
       val cdxOut = Common.lazyValWithCleanup(IOUtil.print(HdfsIO.out(cdxPath)))(_.close)
-      val processed = IteratorUtil.cleanup(CdxUtil.fromWarcGzStream(path, in, filterWarc, digest).filter(filterCdx), in.close).map { record =>
+      val processed = IteratorUtil.cleanup(CdxUtil.fromWarcGzStream(file, in, filterWarc, digest).filter(filterCdx), in.close).map { record =>
         cdxOut.get.println(record.toCdxString)
         1L
       }.sum

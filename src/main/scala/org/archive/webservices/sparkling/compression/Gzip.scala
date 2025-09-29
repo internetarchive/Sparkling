@@ -4,8 +4,8 @@ import java.io.{EOFException, InputStream, OutputStream}
 import com.google.common.io.CountingInputStream
 import org.apache.commons.compress.compressors.gzip.{GzipCompressorInputStream, GzipCompressorOutputStream}
 import org.apache.commons.io.output.CountingOutputStream
-import org.archive.webservices.sparkling.io.{ChainedInputStream, IOUtil, NonClosingInputStream, NonClosingOutputStream}
-import org.archive.webservices.sparkling.util.IteratorUtil
+import org.archive.webservices.sparkling.io.{CatchingInputStream, ChainedInputStream, IOUtil, NonClosingInputStream, NonClosingOutputStream}
+import org.archive.webservices.sparkling.util.{Common, IteratorUtil}
 
 import scala.util.Try
 
@@ -64,18 +64,23 @@ object Gzip extends Decompressor {
       if (nullAppended) None
       else {
         if (current.isDefined) IOUtil.readToEnd(current.get, close = true)
-        val isGz = seekGz(stream)
-        val pos = stream.getCount
-        if (!isGz) {
+        var decompressed: Option[InputStream] = None
+        val nextPos = stream.getCount
+        var pos = nextPos
+        while (decompressed.isEmpty && seekGz(stream)) {
+          pos = stream.getCount
+          decompressed = Try(new GzipCompressorInputStream(new NonClosingInputStream(stream), false)).toOption
+        }
+        if (decompressed.isDefined) {
+          current = Some(IOUtil.supportMark(new CatchingInputStream(decompressed.get)))
+          current.map((pos, _))
+        } else {
           stream.close()
           if (appendNull) {
             nullAppended = true
-            Some((pos, null))
+            Some((nextPos, null))
           } else None
-        } else Try {
-          current = Some(IOUtil.supportMark(new GzipCompressorInputStream(new NonClosingInputStream(stream), false)))
-          current.map((pos, _))
-        }.getOrElse(None)
+        }
       }
     }
   }

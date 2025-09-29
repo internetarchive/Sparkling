@@ -1,5 +1,6 @@
 package org.archive.webservices.sparkling.warc
 
+import org.apache.commons.io.output.CountingOutputStream
 import org.apache.hadoop.fs.Path
 import org.apache.spark.rdd.RDD
 import org.archive.webservices.sparkling._
@@ -154,9 +155,12 @@ object WarcProcessor {
                     if (generateCdx) warcCdxOut.get.println(record.copy(compressedSize = compressedSize).toCdxString(Seq(warcPosition.toString, warcFile)))
                     warcPosition += compressedSize
                   } else {
-                    request(location, offset, length)(IOUtil.copy(_, warcOut.get))
-                    if (generateCdx) warcCdxOut.get.println(record.toCdxString(Seq(warcPosition.toString, warcFile)))
-                    warcPosition += length
+                    val counting = new CountingOutputStream(warcOut.get)
+                    request(location, offset, length)(IOUtil.copy(_, counting, length))
+                    val writtenLength = counting.getByteCount
+                    val r = if (writtenLength != length) record.copy(compressedSize = writtenLength) else record
+                    if (generateCdx) warcCdxOut.get.println(r.toCdxString(Seq(warcPosition.toString, warcFile)))
+                    warcPosition += writtenLength
                   }
                 }
                 Log.debug("Copying " + location + ":" + offset + ":" + length + " - done.")
