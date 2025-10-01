@@ -106,6 +106,8 @@ object StageSyncManager {
 }
 
 class StageSyncManager private (stageId: String) {
+  val MaxSyncAttempts = 3
+
   implicit val logContext: LogContext = LogContext(this)
 
   private var activeTasks = Set.empty[Long]
@@ -289,7 +291,9 @@ class StageSyncManager private (stageId: String) {
 
       Common.sync(initFile(workingDir)) {
         var launched = false
+        var attempt = 0
         Common.infinite {
+          attempt += 1
           try {
             Log.info(s"Launching $workingDir...")
             return Common.timeout(600000) { // 10 minutes
@@ -305,9 +309,10 @@ class StageSyncManager private (stageId: String) {
           } catch {
             case e: Exception =>
               Log.error(e)
-              Log.info(s"Retrying after error (${e.getMessage}): $workingDir...")
-              e.printStackTrace()
               p.destroy()
+              if (attempt >= MaxSyncAttempts) throw e
+              Log.info(s"Retrying after error (${e.getMessage}): $workingDir... (attempt: $attempt)")
+              e.printStackTrace()
               p = shell
           } finally {
             if (launched) Log.info(s"Launched $workingDir.")
