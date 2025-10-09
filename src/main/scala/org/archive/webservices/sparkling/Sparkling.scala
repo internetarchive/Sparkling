@@ -122,7 +122,7 @@ object Sparkling {
   def sc: SparkContext = scOpt match {
     case Some(sc) => sc
     case None =>
-      val sc = SparkUtil.currentContext.getOrElse(SparkContext.getOrCreate)
+      val sc = SparkContext.getOrCreate
       sc.getConf.registerKryoClasses(Array(
         classOf[CdxRecord],
         classOf[WarcRecord],

@@ -42,9 +42,10 @@ object CdxLoader {
       path: String,
       attachments: Map[String, A => Option[String]],
       comments: Map[String, Seq[String]] = Map.empty,
-      maxBatchSize: Long = 1.gb
+      maxBatchSize: Long = 1.gb,
+      resume: Boolean = false
   ): Long = {
-    HdfsIO.ensureOutDir(path)
+    HdfsIO.ensureOutDir(path, ensureNew = !resume)
     val filePrefix = StringUtil.stripSuffixes(new Path(path).getName, GzipExt, CdxExt)
     rdd.mapPartitions { records =>
       val batches = if (maxBatchSize < 0) Iterator(records) else IteratorUtil.grouped(records, maxBatchSize)(_._1.toCdxString.length)

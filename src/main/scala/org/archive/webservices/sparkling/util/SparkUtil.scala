@@ -29,9 +29,6 @@ object SparkUtil {
     "spark.default.parallelism" -> "100"
   )
 
-  private var _currentContext: Option[SparkContext] = None
-  def currentContext: Option[SparkContext] = _currentContext
-
   // interp.load.cp(ammonite.ops.Path(sys.env.get("HADOOP_CONF_DIR").get))
   // Thread.currentThread().getContextClassLoader.getResource("core-site.xml")
   // https://github.com/alexarchambault/ammonite-spark/blob/b33e9145fda4a13d9020cef13bb461e65634ae39/modules/core/src/main/scala/org/apache/spark/sql/ammonitesparkinternals/AmmoniteSparkSessionBuilder.scala
@@ -49,7 +46,7 @@ object SparkUtil {
       jars: Seq[String] = Seq.empty,
       replClassServer: SparkReplClassServer = null
   ): SparkContext = {
-    for (sc <- currentContext if !sc.isStopped) sc.stop()
+    for (sc <- Sparkling.scOpt) sc.stop()
     if (!verbose) {
       Logger.getRootLogger.setLevel(Level.OFF)
       Logger.getLogger("org").setLevel(Level.OFF)
@@ -59,7 +56,7 @@ object SparkUtil {
       Option(replClassServer).map("spark.repl.class.uri" -> _.uri).toMap ++ additionalConfigs
     for ((k, v) <- config) building = building.config(k, v.toString)
     val sc = building.getOrCreate.sparkContext
-    _currentContext = Some(sc)
+    Sparkling.resetSparkContext(Some(sc))
     for (p <- Seq(jarPath) ++ jars) sc.addJar(p)
     for (server <- Option(replClassServer)) sc.addSparkListener(new SparkListener {
       override def onApplicationEnd(applicationEnd: SparkListenerApplicationEnd): Unit = server.stop()
@@ -81,7 +78,7 @@ object SparkUtil {
       jars: Seq[String] = Seq.empty,
       replClassServer: SparkReplClassServer = null
   ): SparkContext = {
-    for (sc <- currentContext if !sc.isStopped) sc.stop()
+    for (sc <- Sparkling.scOpt) sc.stop()
     if (!verbose) {
       Logger.getRootLogger.setLevel(Level.OFF)
       Logger.getLogger("org").setLevel(Level.OFF)
@@ -99,7 +96,7 @@ object SparkUtil {
     ) ++ Option(replClassServer).map("spark.repl.class.uri" -> _.uri).toMap ++ additionalConfigs
     for ((k, v) <- config) building = building.config(k, v.toString)
     val sc = building.getOrCreate.sparkContext
-    _currentContext = Some(sc)
+    Sparkling.resetSparkContext(Some(sc))
     for (p <- Seq(jarPath) ++ jars) sc.addJar(p)
     for (server <- Option(replClassServer)) sc.addSparkListener(new SparkListener {
       override def onApplicationEnd(applicationEnd: SparkListenerApplicationEnd): Unit = server.stop()

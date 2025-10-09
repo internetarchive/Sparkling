@@ -47,7 +47,7 @@ object StageSyncManager {
   }
 
   def launchDetachableShell(proc: SystemProcess): Int = proc.synchronized {
-    val detach = !Sparkling.sc.isLocal
+    val detach = !Sparkling.scOpt.exists(_.isLocal)
     // run
     if (detach) {
       val tmpSesId = "bash" + Instant.now.toEpochMilli
