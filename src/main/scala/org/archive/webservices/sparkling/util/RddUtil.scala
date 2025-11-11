@@ -203,6 +203,32 @@ object RddUtil {
     }
   }
 
+  def loadEqualPartitions[A : ClassTag](
+      path: String,
+      numPartitions: Int = Sparkling.parallelism
+  )(items: (String, Iterator[String]) => Iterator[A])(implicit accessContext: AccessContext = AccessContext.default): RDD[A] = {
+    val files = loadTextFiles(path).map{case (file, lines) => (file, lines.iter(l => IteratorUtil.count(items(file, l))))}.collectAsMap
+    if (files.isEmpty) emptyRDD[A]
+    else {
+      val total = files.values.sum
+      val perPartition = (total.toDouble / numPartitions).toLong
+      val filesBc = Sparkling.sc.broadcast(files)
+      parallelize(numPartitions).flatMap { p =>
+        val files = filesBc.value
+        var drop = p * perPartition
+        CleanupIterator.flatten {
+          files.toSeq.sortBy(_._1).dropWhile { case (_, c) =>
+            val d = c <= drop
+            if (d) drop -= c
+            d
+          }.toIterator.map(_._1).map(f => HdfsIO.iterLines(f).chain(items(f, _)))
+        }.chain { items =>
+          IteratorUtil.take(IteratorUtil.drop(items, drop), perPartition)
+        }
+      }
+    }
+  }
+
   def loadPartitions[A: ClassTag, P: ClassTag: Ordering](path: String)(partition: String => Iterator[P])(load: (String, P) => Iterator[A])(implicit accessContext: AccessContext = AccessContext.default): RDD[A] = {
     val partitioned = loadFilesLocality(path).flatMap { filename => partition(filename).map((_, filename)).toSet }.persist(StorageLevel.MEMORY_AND_DISK)
     val partitionIds = partitioned.map { case (p, f) => p }.distinct.collect.sorted.zipWithIndex.toMap
@@ -693,19 +719,23 @@ object RddUtil {
     processed
   }
 
+  def partitionOutPath(path: String): String = {
+    val fileName = new Path(path).getName
+    val split = fileName.split("\\.", 2)
+    val (filePrefix, fileExt) = (split.head, split.drop(1).headOption.map("." + _).getOrElse(TxtExt))
+    new Path(path, Sparkling.getTaskOutFile(idx => filePrefix + "-" + StringUtil.padNum(idx, 5) + fileExt)).toString
+  }
+
   def savePartitions[A](rdd: => RDD[A], path: String, compress: Boolean = true, skipIfExists: Boolean = false, checkPerFile: Boolean = false, skipEmpty: Boolean = true)(
       action: (Iterator[A], OutputStream, Common.ProcessReporter) => Long
   )(implicit accessContext: AccessContext = AccessContext.default): Long = {
     val completeFlagFile = path + "/" + CompleteFlagFile
     if (skipIfExists && HdfsIO.exists(completeFlagFile)) return 0L
     HdfsIO.ensureOutDir(path, ensureNew = !(skipIfExists && checkPerFile))
-    val fileName = new Path(path).getName
-    val split = fileName.split("\\.", 2)
-    val (filePrefix, fileExt) = (split.head, split.drop(1).headOption.map("." + _).getOrElse(TxtExt))
-    val processed =
+    val processed = {
       if (rdd.getNumPartitions == 0) 0L
       else rdd.mapPartitions { records =>
-        val outPath = new Path(path, Sparkling.getTaskOutFile(idx => filePrefix + "-" + StringUtil.padNum(idx, 5) + fileExt)).toString
+        val outPath = partitionOutPath(path)
         if (skipIfExists && HdfsIO.exists(outPath)) Iterator(0L)
         else {
           if (skipEmpty && !records.hasNext) Iterator(0L)
@@ -717,6 +747,7 @@ object RddUtil {
           }
         }
       }.fold(0L)(_ + _)
+    }
     HdfsIO.touch(completeFlagFile)
     processed
   }

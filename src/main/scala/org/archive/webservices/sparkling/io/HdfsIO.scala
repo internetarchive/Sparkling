@@ -151,9 +151,11 @@ class HdfsIO private (val uri: String) extends Serializable {
       strategy: HdfsIO.LoadingStrategy = HdfsIO.defaultLoadingStrategy
   )(action: InputStream => R): R = {
     val in = open(path, offset, length, decompress, retries, sleepMillis, strategy)
-    val r = action(in)
-    Try(in.close())
-    r
+    try {
+      action(in)
+    } finally {
+      Try(in.close())
+    }
   }
 
   def copyFromLocal(src: String, dst: String, move: Boolean = false, overwrite: Boolean = false, replication: Short = 0): Unit = {

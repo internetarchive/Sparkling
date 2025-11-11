@@ -51,9 +51,10 @@ class ManagedVal[A] private (create: => A, cleanup: Either[Exception, A] => Unit
 //      SparkUtil.removeTaskCleanup(this)
     }
 
-  def apply[R](action: A => R, throwOnClearError: Boolean = false): R =
+  def apply[R](action: A => R, throwOnClearError: Boolean = false): R = {
     try { action(get) }
     finally { clear(throwOnClearError) }
+  }
 
   def map[B](map: A => B, cleanup: Either[Exception, B] => Unit = (_: Either[Exception, B]) => {}, bubbleClear: Boolean = true, lazyEval: Boolean = true): ManagedVal[B] = ManagedVal(
     {

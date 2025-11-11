@@ -22,6 +22,6 @@ class ChainedInputStream(in: Iterator[InputStream], nextOnError: Boolean = false
   override def read(b: Array[Byte], off: Int, len: Int): Int = next(-1, _.read(b, off, len))
   override def skip(n: Long): Long = next(0, _.skip(n))
   override def available(): Int = next(0, _.available)
-  override def close(): Unit = for (s <- buffered) s.close()
+  override def close(): Unit = for (s <- buffered.headOption) s.close()
   override def markSupported(): Boolean = false
 }
