@@ -31,9 +31,15 @@ object RddUtil {
 
   case class AggregateRecordsPointer[D: ClassTag, A: ClassTag](value: A, records: RecordsPointer[D])
 
-  def shuffle[T: ClassTag](rdd: RDD[T], numPartitions: Int): RDD[T] = {
+  def shuffle[T: ClassTag](rdd: RDD[T], numPartitions: Int = Sparkling.parallelism): RDD[T] = {
     val partitioner = new HashPartitioner(numPartitions)
     initPartitions(rdd.zipWithIndex.map { case (v, i) => (i, v) }.partitionBy(partitioner).values)
+  }
+
+  def repartition[T: ClassTag](rdd: RDD[T], numPartitions: Int = Sparkling.parallelism): RDD[T] = {
+    val perPartition = (rdd.count.toDouble / numPartitions).ceil
+    val partitioner = new HashPartitioner(numPartitions)
+    initPartitions(rdd.zipWithIndex.map { case (v, i) => (i / perPartition, v) }.partitionBy(partitioner).values)
   }
 
   def parallelize(items: Int): RDD[Int] = parallelize(items, items)
@@ -211,7 +217,7 @@ object RddUtil {
     if (files.isEmpty) emptyRDD[A]
     else {
       val total = files.values.sum
-      val perPartition = (total.toDouble / numPartitions).toLong
+      val perPartition = (total.toDouble / numPartitions).ceil.toLong
       val filesBc = Sparkling.sc.broadcast(files)
       parallelize(numPartitions).flatMap { p =>
         val files = filesBc.value

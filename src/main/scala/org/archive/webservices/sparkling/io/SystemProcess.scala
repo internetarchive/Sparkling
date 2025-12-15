@@ -179,4 +179,21 @@ object SystemProcess {
   def exec(cmd: String, supportsEcho: Boolean = false): SystemProcess = {
     apply(Runtime.getRuntime.exec(cmd), supportsEcho)
   }
+
+  def runWithSettings(cmd: String*)(set: ProcessBuilder => Unit = _ => {}): String = {
+    val pb = new ProcessBuilder(cmd: _*)
+    set(pb)
+    val process = pb.start
+    val reader = new BufferedReader(new InputStreamReader(process.getInputStream))
+    val output = new StringBuilder
+    var line: String = null
+    while({
+      line = reader.readLine
+      line != null
+    }) output.append(line).append("\n")
+    process.waitFor()
+    output.toString.trim
+  }
+
+  def run(cmd: String*): String = runWithSettings(cmd: _*)()
 }

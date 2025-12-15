@@ -67,7 +67,7 @@ object Sparkling {
   var tmpHdfsPath: String = prop("/tmp")(tmpHdfsPath, tmpHdfsPath = _)
   var tmpFilePrefix: String = prop("sparkling-")(tmpFilePrefix, tmpFilePrefix = _)
   var tmpFileReplication: Short = prop(1.toShort)(tmpFileReplication, tmpFileReplication = _)
-  var defaultReplication: Short = prop(2.toShort)(defaultReplication, defaultReplication = _)
+  var defaultReplication: Short = prop(3.toShort)(defaultReplication, defaultReplication = _)
 
   private[sparkling] val parentTaskContext = new ThreadLocal[TaskContext]
   def taskContext: Option[TaskContext] = Option(TaskContext.get).orElse(Option(parentTaskContext.get))
@@ -86,6 +86,8 @@ object Sparkling {
       CollectionUtil.concurrentMap[String, Any]
     })
   }
+
+  val sharedStore: mutable.Map[String, Any] = CollectionUtil.concurrentMap[String, Any]
 
   private val _taskInFiles = CollectionUtil.concurrentMap[Long, (Int, String)]
   def setTaskInFile(idx: Int, filename: String): String = {

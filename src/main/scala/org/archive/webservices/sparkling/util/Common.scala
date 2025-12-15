@@ -7,6 +7,7 @@ import java.io.{File, PrintStream, PrintWriter, StringWriter}
 import java.nio.channels.FileChannel
 import java.nio.file.StandardOpenOption
 import java.util.concurrent.{TimeUnit, TimeoutException}
+import scala.annotation.tailrec
 import scala.util.Try
 
 object Common {
@@ -186,27 +187,33 @@ object Common {
 
   def tryOpt[A](a: => Option[A]): Option[A] = Try(a).toOption.flatten
 
-  def sync[R](file: String)(action: => R): R = sync(new File(file))(action)
+  def sync[R](file: String)(action: => R): R = syncEither(Seq(file))(action)
 
-  def sync[R](file: File)(action: => R): R = {
-    try {
+  def sync[R](file: File)(action: => R): R = sync(file.getAbsolutePath)(action)
+
+  def syncEither[R](files: Seq[String])(action: => R): R = {
+    if (files.isEmpty) action
+    else {
+      val f = files.map(new File(_)).map(f => (f, f.toPath))
       infinite {
-        val channel = FileChannel.open(file.toPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE)
-        try {
-          val lock = channel.tryLock()
-          if (lock != null) {
-            try {
-              return action
-            } finally {
-              lock.release()
+        for ((file, path) <- f) {
+          val channel = FileChannel.open(path, StandardOpenOption.CREATE, StandardOpenOption.READ, StandardOpenOption.WRITE)
+          try {
+            val lock = Try(channel.tryLock()).getOrElse(null)
+            if (lock != null) {
+              try {
+                return action
+              } finally {
+                file.delete()
+                lock.release()
+              }
+            } else {
             }
+          } finally {
+            channel.close()
           }
-        } finally {
-          channel.close()
         }
       }
-    } finally {
-      IOUtil.delete(file)
     }
   }
 
@@ -235,6 +242,7 @@ object Common {
   def infinite[R](action: => Unit): R = {
     while (true) {
       action
+      Thread.`yield`()
     }
     unreachable
   }

@@ -172,6 +172,8 @@ class HdfsIO private (val uri: String) extends Serializable {
     if (dstReplication > 1) fs.setReplication(dstPath, dstReplication)
   }
 
+  def copyToLocal(src: String, dst: String): Unit = fs.copyToLocalFile(new Path(src), new Path(dst))
+
   def rename(src: String, dst: String): Unit = fs.rename(new Path(src), new Path(dst))
 
   def length(path: String): Long = fs.getFileStatus(new Path(path)).getLen

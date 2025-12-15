@@ -304,23 +304,27 @@ object IteratorUtil {
   }
 
   def parallelMap[A, B](iter: Iterator[A], parallelism: Int = 5, maxBuffer: Int = 100, skipNotKill: Boolean = true, cancelNotWait: Boolean = true)(map: A => B): Iterator[Option[B]] = {
+    parallelMapItems(iter, parallelism, maxBuffer, skipNotKill, cancelNotWait)(map).map(_._2)
+  }
+
+  def parallelMapItems[A, B](iter: Iterator[A], parallelism: Int = 5, maxBuffer: Int = 100, skipNotKill: Boolean = true, cancelNotWait: Boolean = true)(map: A => B): Iterator[(A, Option[B])] = {
     class FutureVal(f: Future[Boolean], value: FutureVal => Option[B]) {
       val future: Future[Option[B]] = ConcurrencyUtil.mapFuture(f)(_ => value(this))
       var task: Option[FutureTask[B]] = None
     }
 
-    val buffer = collection.mutable.Queue.empty[FutureVal]
+    val buffer = collection.mutable.Queue.empty[(A, FutureVal)]
 
     def next(future: Future[Boolean]): Unit = {
       buffer.synchronized {
         if (iter.hasNext) {
           val item = iter.next
-          buffer.enqueue(new FutureVal(
+          buffer.enqueue((item, new FutureVal(
             future,
             { f =>
               while (maxBuffer > -1 && buffer.size > maxBuffer) {
                 if (cancelNotWait) {
-                  for (task <- buffer.headOption.flatMap(_.task) if !task.isDone) {
+                  for (task <- buffer.headOption.flatMap(_._2.task) if !task.isDone) {
                     task.cancel(true)
                     Log.info("#parallelMap - cancelling task...")
                   }
@@ -343,7 +347,7 @@ object IteratorUtil {
               next(future)
               r
             }
-          ))
+          )))
         }
       }
     }
@@ -351,9 +355,15 @@ object IteratorUtil {
     for (_ <- 0 to parallelism) next(ConcurrencyUtil.future(true))
 
     IteratorUtil.whileDefined {
-      buffer.headOption.map { f =>
-        try { Await.result(f.future, Duration.Inf) }
-        finally { buffer.synchronized(buffer.dequeue()) }
+      buffer.headOption.map { case (item, f) =>
+        (item, {
+          try {
+            Await.result(f.future, Duration.Inf)
+          }
+          finally {
+            buffer.synchronized(buffer.dequeue())
+          }
+        })
       }
     }
   }

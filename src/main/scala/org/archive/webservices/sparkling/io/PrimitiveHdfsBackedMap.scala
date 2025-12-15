@@ -65,7 +65,7 @@ class PrimitiveHdfsBackedMapImpl private[io] (val path: String, val key: String 
     var prev: Option[CleanupIterator[String]] = None
     var first = true
     CleanupIterator.flatten(files.toIterator.map { file =>
-      val in = HdfsIO.open(file, offset = if (first) offset else 0)
+      val in = HdfsIO.open(file, offset = if (first) offset else 0, strategy = HdfsBackedMap.hdfsLoadingStrategy)
       first = false
       IteratorUtil.cleanup(IOUtil.lines(in).filter(_.trim.nonEmpty).map(l => (file, key(l), l)), in.close)
     }).onClear { () => for (p <- prev) p.clear(false) }.chain { lines =>

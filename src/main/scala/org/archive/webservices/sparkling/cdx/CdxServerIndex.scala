@@ -9,6 +9,7 @@ import org.archive.webservices.sparkling.indexed.{HdfsIndexBackedMap, PrefixInde
 import org.archive.webservices.sparkling.io.{HdfsBackedMap, HdfsIO, IOUtil}
 import org.archive.webservices.sparkling.util._
 
+import java.io.InputStream
 import scala.math.pow
 import scala.util.Random
 
@@ -127,8 +128,8 @@ object CdxServerIndex {
                         val fileOffsets = Iterator((filename, offset)) ++ files.dropWhile(_ <= filename).map((_, 0L))
                         CleanupIterator.flatten(fileOffsets.map { case (f, o) =>
                           val in = HdfsIO.open(new Path(indexDirPath, f).toString, offset = o)
-                          CleanupIterator(IOUtil.lines(in), in.close).chain(IteratorUtil.groupSortedBy(_)(StringUtil.prefixBySeparator(_, " ")))
-                        })
+                          CleanupIterator(IOUtil.lines(in), in.close)
+                        }).chain(IteratorUtil.groupSortedBy(_)(StringUtil.prefixBySeparator(_, " ")))
                       }
                     }
                     val candidates =
@@ -189,8 +190,12 @@ object CdxServerIndex {
     new HdfsBackedMap[CdxRecord](primitiveHdfsBackedStrMap(indexDirPath), str => CdxRecord.fromString(str).get)
   }
 
-  def loadRandomSampleStr(indexDirPath: String, num: Int, fromWhile: Option[(String, String => Boolean)] = None, filter: Option[String => Boolean] = None, spread: Int = 5)(implicit accessContext: AccessContext = AccessContext.default): ManagedVal[RDD[String]] = {
-    val indexRdd = RddUtil.loadTextFiles(indexDirPath + "/part-*-idx")
+  def loadRandomSampleStr(indexDirPath: String, num: Int, fromWhile: Option[(String, String => Boolean)] = None, filter: Option[String => Boolean] = None, spread: Int = 5, capFactor: Double = 1.5)(implicit accessContext: AccessContext = AccessContext.default): ManagedVal[RDD[String]] = {
+    loadRandomSampleStrSupplier(indexDirPath, num, fromWhile, filter, spread, capFactor).map(_.get)
+  }
+
+  def loadRandomSampleStrSupplier(indexDirPath: String, num: Int, fromWhile: Option[(String, String => Boolean)] = None, filter: Option[String => Boolean] = None, spread: Int = 5, capFactor: Double = 1.5)(implicit accessContext: AccessContext = AccessContext.default): ManagedVal[ValueSupplier[RDD[String]]] = {
+    val indexRdd = RddUtil.loadTextFiles(indexDirPath + "/part-*-idx").coalesce(Sparkling.parallelism)
     val managed = if (fromWhile.isDefined) {
       val (from, whileCond) = fromWhile.get
       lazy val filesBroadcast = {
@@ -214,17 +219,18 @@ object CdxServerIndex {
           } else (Iterator.empty, lines)
           head ++ tail.chain(_.takeWhile(l => whileCond(StringUtil.prefixBySeparator(l, " "))))
         }
-      }, _ => filesBroadcast.unpersist())
+      }, _ => {
+        filesBroadcast.unpersist()
+      })
     } else ManagedVal(indexRdd.flatMap(_._2))
     managed.map { indexLines =>
       val indexLinesCount = indexLines.count
       val indexLinesNum = ((1.0 - pow(Random.nextDouble, spread)) * num).min(indexLinesCount).max(1)
       val indexRnd = indexLinesNum / indexLinesCount
-      val indexSampled = if (indexRnd < 0) indexLines else indexLines.mapPartitions { partition =>
-        partition.filter(_ => Random.nextDouble < indexRnd)
-      }
       val cdxPerIndexLine = num.toDouble / indexLinesNum
-      indexSampled.flatMap { idxLine =>
+      ValueSupplier(indexLines.mapPartitions { partition =>
+        partition.filter(_ => Random.nextDouble < indexRnd)
+      }.flatMap { idxLine =>
         val split = RegexUtil.split(idxLine, "\t")
         val (filename, offset, length) = (split(1) + ".gz", split(2).toLong, split(3).toLong) // filename, offset, length
         val path = indexDirPath + "/" + filename
@@ -248,9 +254,11 @@ object CdxServerIndex {
               true
             } else false
           } else false
+        }.takeWhile { _ =>
+          selected < cdxPerIndexLine * capFactor
         }
         IteratorUtil.cleanup(sample, in.close)
-      }
+      })
     }
   }
 
@@ -268,7 +276,7 @@ object CdxServerIndex {
             lines.chain(_.dropWhile(_ < from).takeWhile(l => whileCond(StringUtil.prefixBySeparator(l, " ")))))
         } else (true, lines)
         (file, relevant.iter(IteratorUtil.count), beginning)
-      }.sortBy(_._1).collect
+      }.collect.sortBy(_._1)
       val totalLines = files.map(_._2).sum + (if (!files.head._3) 1 else 0)
       val linesPerPartition = (totalLines.toDouble / numPartitions).ceil.toLong
       val prevFile = files.zipWithIndex.find { case ((_, lines, b), _) => lines > 0 || b }.filter { case ((_, _, beginning), i) => i > 0 && beginning }.map { case (_, i) => files(i - 1)._1 }

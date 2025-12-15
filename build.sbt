@@ -38,7 +38,8 @@ lazy val sparkling = (project in file(".")).settings(
     "sh.almond" %% "ammonite-spark" % "0.10.1" % "provided",
     ("com.lihaoyi" % "ammonite-interp" % "1.7.4" % "provided").cross(CrossVersion.full),
     ("com.lihaoyi" % "ammonite-repl" % "1.7.4" % "provided").cross(CrossVersion.full),
-    "com.amazonaws" % "aws-java-sdk" % "1.7.4" % "provided"
+    "com.amazonaws" % "aws-java-sdk" % "1.7.4" % "provided",
+    "org.nanohttpd" % "nanohttpd" % "2.3.1"
   ) ++ Seq("io.circe" %% "circe-core", "io.circe" %% "circe-generic", "io.circe" %% "circe-parser").map(_ % circeVersion)
 )
 
