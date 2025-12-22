@@ -7,7 +7,6 @@ import java.util.concurrent.{CancellationException, FutureTask}
 import scala.annotation.tailrec
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, ExecutionContext, Future}
-import scala.util.Try
 
 object IteratorUtil {
   implicit val logContext: LogContext = LogContext(this)
@@ -290,7 +289,7 @@ object IteratorUtil {
     mapSliding(iter, sliding)(a => Future(map(a)))
   }
 
-  def mapPreload[A, B](iter: Iterator[A], numPreload: Int = 0)(map: A => B): Iterator[B] = {
+  def mapPreload[A, B](iter: Iterator[A], numPreload: Int = 0)(map: A => B)(implicit executionContext: ExecutionContext = Sparkling.executionContext): Iterator[B] = {
     mapFutures(iter, numPreload)(map).map(Await.result(_, Duration.Inf))
   }
 

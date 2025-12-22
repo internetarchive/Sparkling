@@ -66,6 +66,11 @@ class LocalHttpServer(val port: Int) extends NanoHTTPD(port) {
                   (key, value) <- http.headers if key != null && value != null && !LocalHttpServer.FilterWarcHeaders.contains(key)
                 } response.addHeader(key, value)
                 response.addHeader(LocalHttpServer.AccessControlAllowCredentialsHeader, "true")
+
+                response.addHeader("Cache-Control", "no-store, no-cache, must-revalidate")
+                response.addHeader("Pragma", "no-cache")
+                response.addHeader("Expires", "0")
+
                 response
               }.getOrElse(notFound)
             case None => notFound

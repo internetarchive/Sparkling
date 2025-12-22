@@ -14,8 +14,6 @@ object CdxServerIndexDistributable {
 class CdxServerIndexDistributable private (indexDirPath: String) extends Serializable {
   import org.archive.webservices.sparkling.Sparkling._
 
-  lazy val blockSize: Long = HdfsIO.fs.getDefaultBlockSize(new Path(indexDirPath))
-
   private var _filesBroadcasted: Boolean = false
   private lazy val filesBc: Broadcast[Seq[String]] = sc.broadcast {
     _filesBroadcasted = true
@@ -57,10 +55,9 @@ class CdxServerIndexDistributable private (indexDirPath: String) extends Seriali
     val cdx = CleanupIterator.flatten(fileOffsets.map { case (f, o) =>
       val in = HdfsIO.open(new Path(indexDirPath, f).toString, offset = o, strategy = HdfsIO.LoadingStrategy.Remote)
       CleanupIterator(IOUtil.lines(in), in.close)
-    }).chain {
-      IteratorUtil.groupSortedBy(_)(StringUtil.prefixBySeparator(_, " "))
-    }.chain {
-      _.dropWhile(_._1 < surt).take(1).filter(_._1 == surt).flatMap(_._2).flatMap(CdxRecord.fromString).filter(filter)
+    }).chain { lines =>
+      val groups = IteratorUtil.groupSortedBy(lines)(StringUtil.prefixBySeparator(_, " "))
+      groups.dropWhile(_._1 < surt).take(1).filter(_._1 == surt).flatMap(_._2).flatMap(CdxRecord.fromString).filter(filter)
     }
     if (timestamp.nonEmpty) {
       val ts = Time14Util.parse(timestamp).toInstant.getMillis

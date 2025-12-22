@@ -82,7 +82,7 @@ object RddUtil {
       if (files.isEmpty) emptyRDD
       else if (groupFiles > 1) {
         val numFiles = IteratorUtil.count(files)
-        rdd.coalesce((numFiles / groupFiles).ceil.toInt)
+        rdd.coalesce((numFiles.toDouble / groupFiles).ceil.toInt)
       } else {
         val filesBc = sc.broadcast(files.toSeq.sorted.zipWithIndex.toMap)
         rdd.mapPartitions { partition =>

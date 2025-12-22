@@ -1,13 +1,14 @@
 package org.archive.webservices.sparkling.util
 
-import org.archive.webservices.sparkling.io.IOUtil
+import org.archive.webservices.sparkling.Sparkling
 import org.archive.webservices.sparkling.logging.{Log, LogContext}
 
-import java.io.{File, PrintStream, PrintWriter, StringWriter}
+import java.io.{File, PrintWriter, StringWriter}
 import java.nio.channels.FileChannel
 import java.nio.file.StandardOpenOption
 import java.util.concurrent.{TimeUnit, TimeoutException}
-import scala.annotation.tailrec
+import scala.collection.mutable
+import scala.concurrent.ExecutionContext
 import scala.util.Try
 
 object Common {
@@ -39,6 +40,16 @@ object Common {
       case e: Throwable =>
         Log.error(e)
         None
+    }
+  }
+
+  def retryForever[A](action: => A)(implicit context: LogContext = CommonLogContext): A = {
+    infinite {
+      try {
+        return action
+      } catch {
+        case e: Exception => Log.error(e)
+      }
     }
   }
 
@@ -217,6 +228,30 @@ object Common {
     }
   }
 
+  def queueProcessor[A, B, C](iter: Iterator[A], threads: Int)(process: A => B)(async: (B, mutable.Queue[A]) => Option[C])(implicit executionContext: ExecutionContext = Sparkling.executionContext): Iterator[C] = {
+    val inQueue = mutable.Queue.empty[A]
+    val processingMu = new AnyRef
+    var processing: Int = 0
+
+    val items = IteratorUtil.whileDefined {
+      if (!iter.hasNext) {
+        while (inQueue.isEmpty && processing > 0) Thread.`yield`()
+      }
+      if (inQueue.nonEmpty) inQueue.synchronized(Some(inQueue.dequeue)) else {
+        if (iter.hasNext) Some(iter.next) else None
+      }
+    }.map { item =>
+      processingMu.synchronized(processing += 1)
+      process(item)
+    }
+
+    IteratorUtil.mapPreload(items, numPreload = threads) { b =>
+      val opt = async(b, inQueue)
+      processingMu.synchronized(processing -= 1)
+      opt
+    }.flatten
+  }
+
   def synchronizedIf[R](obj: AnyRef, condition: => Boolean, sleep: => Unit = Thread.`yield`())(action: => R): R = {
     infinite {
       obj.synchronized {
@@ -224,7 +259,6 @@ object Common {
       }
       sleep
     }
-    unreachable
   }
 
   def printStackTrace(print: Array[String] => Unit = _.foreach(println)): Unit = {

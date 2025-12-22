@@ -25,32 +25,36 @@ object Gzip extends Decompressor {
     }
   }
 
-  def seekGz(in: InputStream): Boolean = {
+  def seekGzOffset(in: InputStream): Long = {
+    var offset = 0L
     try {
-      var isGz = false
       in.mark(2)
-      while (!isGz) {
+      Common.infinite {
         val b0 = in.read
         if (b0 == Magic0) {
           val b1 = in.read
+          offset += 1
           if (b1 == Magic1) {
-            isGz = true
+            return offset
           } else {
-            if (b1 == -1) return false
+            if (b1 == -1) return -1
             in.mark(2)
+            offset += 2
           }
         } else {
-          if (b0 == -1) return false
+          if (b0 == -1) return -1
           in.mark(2)
+          offset += 1
         }
       }
-      isGz
     } catch {
-      case _: EOFException => false
+      case _: EOFException => -1
     } finally {
       in.reset()
     }
   }
+
+  def seekGz(in: InputStream): Boolean = seekGzOffset(in) >= 0
 
   def isCompressed(filename: String): Boolean = filename.toLowerCase.endsWith(GzipExt)
 
