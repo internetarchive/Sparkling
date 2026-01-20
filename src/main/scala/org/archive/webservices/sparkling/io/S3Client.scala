@@ -1,13 +1,13 @@
 package org.archive.webservices.sparkling.io
 
 import com.amazonaws.auth.{AWSCredentials, AWSCredentialsProvider, AnonymousAWSCredentials, BasicAWSCredentials}
-import com.amazonaws.services.s3.model.{ListObjectsRequest, ObjectMetadata}
-import com.amazonaws.services.s3.transfer.{TransferManager, Upload}
+import com.amazonaws.services.s3.model.{GetObjectRequest, ListObjectsRequest, ObjectMetadata}
+import com.amazonaws.services.s3.transfer.{Download, TransferManager, Upload}
 import com.amazonaws.services.s3.{AmazonS3Client, S3ClientOptions}
 import com.amazonaws.{AmazonServiceException, ClientConfiguration}
-import scala.collection.convert.ImplicitConversions._
 
 import java.io._
+import scala.collection.convert.ImplicitConversions._
 
 object S3Client {
   object AnonymousAWSCredentialsProvider extends AWSCredentialsProvider {
@@ -87,11 +87,12 @@ class S3Client(val s3: AmazonS3Client) {
     }
   }
 
-  def list(bucket: String, path: String): Set[String] = {
-    val listObjectsRequest = new ListObjectsRequest().withBucketName(bucket).withPrefix(path.stripSuffix("/") + "/").withDelimiter("/")
+  def list(bucket: String, path: String): Seq[String] = {
+    val prefix = (path.trim.stripSuffix("/") + "/").stripPrefix("/")
+    val listObjectsRequest = new ListObjectsRequest().withBucketName(bucket).withPrefix(prefix).withDelimiter("/")
     val listing = s3.listObjects(listObjectsRequest)
     listing.getObjectSummaries.map(_.getKey) ++ listing.getCommonPrefixes
-  }.toSet
+  }
 
   def exists(bucket: String, dstPath: String): Boolean = meta(bucket, dstPath).isDefined
 
@@ -104,18 +105,18 @@ class S3Client(val s3: AmazonS3Client) {
 
   def length(bucket: String, dstPath: String): Long = meta(bucket, dstPath).map(_.getContentLength).getOrElse(-1)
 
-  def open[R](bucket: String, dstPath: String)(action: InputStream => R): R = {
-    val tmpFile = IOUtil.tmpFile
+  def download(bucket: String, src: String, dst: String): Download = download(bucket, src, new File(dst))
+
+  def download(bucket: String, src: String, dst: File): Download = {
+    transfers.download(bucket, src, dst)
+  }
+
+  def open[R](bucket: String, path: String)(action: InputStream => R): R = {
+    val in = s3.getObject(new GetObjectRequest(bucket, path)).getObjectContent
     try {
-      transfers.download(bucket, dstPath, tmpFile).waitForCompletion()
-      val in = new BufferedInputStream(new FileInputStream(tmpFile))
-      try {
-        action(in)
-      } finally {
-        in.close()
-      }
+      action(in)
     } finally {
-      tmpFile.delete()
+      in.close()
     }
   }
 

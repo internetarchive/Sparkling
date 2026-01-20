@@ -2,7 +2,7 @@ package org.archive.webservices.sparkling.cdx
 
 import org.apache.hadoop.fs.Path
 import org.apache.spark.broadcast.Broadcast
-import org.archive.webservices.sparkling.io.{HdfsBackedMap, HdfsIO, IOUtil}
+import org.archive.webservices.sparkling.io.{HdfsBackedMap, DfsIO, IOUtil}
 import org.archive.webservices.sparkling.util._
 
 object CdxServerIndexDistributable {
@@ -17,7 +17,7 @@ class CdxServerIndexDistributable private (indexDirPath: String) extends Seriali
   private var _filesBroadcasted: Boolean = false
   private lazy val filesBc: Broadcast[Seq[String]] = sc.broadcast {
     _filesBroadcasted = true
-    HdfsIO.files(new Path(indexDirPath, "part-*.gz").toString).map(_.split('/').last).toSeq.sorted
+    DfsIO.files(new Path(indexDirPath, "part-*.gz").toString).map(_.split('/').last).toSeq.sorted
   }
 
   private var _cdxIndexBroadcasted: Boolean = false
@@ -53,7 +53,7 @@ class CdxServerIndexDistributable private (indexDirPath: String) extends Seriali
       files.dropWhile(_ <= filename).map((_, 0L))
     }
     val cdx = CleanupIterator.flatten(fileOffsets.map { case (f, o) =>
-      val in = HdfsIO.open(new Path(indexDirPath, f).toString, offset = o, strategy = HdfsIO.LoadingStrategy.Remote)
+      val in = DfsIO.open(new Path(indexDirPath, f).toString, offset = o, strategy = DfsIO.LoadingStrategy.Remote)
       CleanupIterator(IOUtil.lines(in), in.close)
     }).chain { lines =>
       val groups = IteratorUtil.groupSortedBy(lines)(StringUtil.prefixBySeparator(_, " "))

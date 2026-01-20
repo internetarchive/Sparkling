@@ -1,7 +1,7 @@
 package org.archive.webservices.sparkling.sam
 
 import org.archive.webservices.sparkling.Sparkling
-import org.archive.webservices.sparkling.io.HdfsIO
+import org.archive.webservices.sparkling.io.DfsIO
 import org.archive.webservices.sparkling.util.RddUtil
 
 import scala.reflect.ClassTag
@@ -15,9 +15,9 @@ object SplitAndMergeJob {
       partitions: Int = 0,
       splitPath: (String, Int, String) => String = SplitAndMergeFileUtil.splitPath,
       outPath: (String, String) => String = SplitAndMergeFileUtil.mergePath,
-      merge: (Seq[String], String) => Unit = HdfsIO.concat(_, _)
+      merge: (Seq[String], String) => Unit = DfsIO.concat(_, _)
   )(partition: String => Iterator[(String, Int)])(run: (String, Int, String) => Long): Long = {
-    HdfsIO.ensureOutDir(outDir, ensureNew = false)
+    DfsIO.ensureOutDir(outDir, ensureNew = false)
     Sparkling.checkpointOrTmpDir(checkpointId(outDir)) { tmpOutDir =>
       val processed = RddUtil.loadPartitions(path: String)(partition) { case (filename, (outFile, p)) =>
         val splitFile = splitPath(outFile, p, tmpOutDir)
@@ -35,9 +35,9 @@ object SplitAndMergeJob {
       readSplit: (String, Long, Long) => Iterator[A],
       splitPath: (String, Int, String) => String = SplitAndMergeFileUtil.splitPath,
       outPath: (String, String) => String = SplitAndMergeFileUtil.mergePath,
-      merge: (Seq[String], String) => Unit = HdfsIO.concat(_, _)
+      merge: (Seq[String], String) => Unit = DfsIO.concat(_, _)
   )(run: (Iterator[A], String) => String): Long = {
-    HdfsIO.ensureOutDir(outDir, ensureNew = false)
+    DfsIO.ensureOutDir(outDir, ensureNew = false)
     Sparkling.checkpointOrTmpDir(checkpointId(outDir)) { tmpOutDir =>
       val splits = RddUtil.loadFilesLocality(path).flatMap(file => createSplits(file).zipWithIndex.map { case ((offset, length), idx) => (file, offset, length, idx) })
       RddUtil.shuffle(splits, Sparkling.parallelism).map { case (file, offset, length, idx) =>
@@ -59,12 +59,12 @@ object SplitAndMergeJob {
       writeSplit: (String, Long, Long, String) => Unit,
       splitPath: (String, Int, String) => String = SplitAndMergeFileUtil.splitPath,
       outPath: (String, String) => String = SplitAndMergeFileUtil.mergePath,
-      merge: (Seq[String], String) => Unit = HdfsIO.concat(_, _)
+      merge: (Seq[String], String) => Unit = DfsIO.concat(_, _)
   )(run: (String, String) => String): Long = {
-    HdfsIO.ensureOutDir(outDir, ensureNew = false)
+    DfsIO.ensureOutDir(outDir, ensureNew = false)
     Sparkling.checkpointOrTmpDir(checkpointId(outDir)) { tmpSplitDir =>
       SplitAndMergeFileUtil.split(path, tmpSplitDir, createSplits, writeSplit, splitPath)
-      HdfsIO.tmpPath { tmpOutDir =>
+      DfsIO.tmpPath { tmpOutDir =>
         val tmpOutPath = run(tmpSplitDir, tmpOutDir)
         SplitAndMergeFileUtil.merge(tmpOutPath, outDir, outPath, merge)
       }

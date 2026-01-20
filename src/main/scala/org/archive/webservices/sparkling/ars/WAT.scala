@@ -15,7 +15,7 @@ import org.archive.resource.{MetaData, Resource, ResourceConstants, ResourceCont
 import org.archive.streamcontext.SimpleStream
 import org.archive.webservices.sparkling.Sparkling
 import org.archive.webservices.sparkling.compression.Gzip
-import org.archive.webservices.sparkling.io.{HdfsIO, IOUtil, PipingOutputStream}
+import org.archive.webservices.sparkling.io.{DfsIO, IOUtil, PipingOutputStream}
 import org.archive.webservices.sparkling.util._
 import scala.collection.JavaConverters._
 
@@ -27,7 +27,7 @@ object WAT {
   private val warcFactory = new WARCResourceFactory
 
   def fromWarcFile[R](warcPath: String, watFilename: Option[String] = None, maxHtmlContentLength: Int = -1): InputStream = {
-    val in = HdfsIO.open(warcPath, decompress = false)
+    val in = DfsIO.open(warcPath, decompress = false)
     fromWarcStream(in, new Path(warcPath).getName, watFilename, maxHtmlContentLength, bubbleClose = true)
   }
 

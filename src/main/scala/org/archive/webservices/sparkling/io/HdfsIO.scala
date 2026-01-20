@@ -5,7 +5,7 @@ import org.apache.hadoop.fs._
 import org.apache.spark.deploy.SparkHadoopUtil
 import org.archive.webservices.sparkling.AccessContext
 import org.archive.webservices.sparkling.logging.{Log, LogContext}
-import org.archive.webservices.sparkling.util.{CleanupIterator, CollectionUtil, Common, IteratorUtil}
+import org.archive.webservices.sparkling.util.{CleanupIterator, Common, IteratorUtil}
 
 import java.io.{FileSystem => _, _}
 import java.net.URI
@@ -15,13 +15,9 @@ import scala.util.{Random, Try}
 object HdfsIO {
   import org.archive.webservices.sparkling.Sparkling._
 
-  type LoadingStrategy = LoadingStrategy.Value
+  val LoadingStrategy: DfsIO.LoadingStrategy.type = DfsIO.LoadingStrategy
 
-  object LoadingStrategy extends Enumeration {
-    val Remote, BlockWise, CopyLocal, Dynamic = Value
-  }
-
-  var defaultLoadingStrategy: LoadingStrategy = prop(LoadingStrategy.Dynamic)(defaultLoadingStrategy, defaultLoadingStrategy = _)
+  var defaultLoadingStrategy: DfsIO.LoadingStrategy = prop(LoadingStrategy.Dynamic)(defaultLoadingStrategy, defaultLoadingStrategy = _)
   var dynamicCopyLocalThreshold: Double = prop(0.5)(dynamicCopyLocalThreshold, dynamicCopyLocalThreshold = _)
   var blockReadTimeoutMillis: Int = prop(1000 * 60 * 5)(blockReadTimeoutMillis, blockReadTimeoutMillis = _) // 5 minutes
 
@@ -44,20 +40,18 @@ object HdfsIO {
   lazy val default: HdfsIO = apply(FileSystem.get(SparkHadoopUtil.get.conf))
 
   implicit def toInstance(self: this.type)(implicit context: AccessContext = AccessContext.default): HdfsIO = {
-    context.hdfsIO
+    context.dfsIO.asInstanceOf[HdfsIO]
   }
 }
 
-class HdfsIO private (val uri: String) extends Serializable {
+class HdfsIO private (val uri: String) extends DfsIO {
   import org.archive.webservices.sparkling.Sparkling._
 
   @transient lazy val fs: FileSystem = FileSystem.get(new URI(uri), SparkHadoopUtil.get.conf)
 
-  @transient implicit lazy val logContext: LogContext = LogContext(this)
+  @transient lazy val localFiles = collection.mutable.Map.empty[String, String]
 
-  @transient private lazy val localFiles = collection.mutable.Map.empty[String, String]
-
-  @transient implicit lazy val accessContext: AccessContext = AccessContext(this)
+  override val supportsHadoopFileAPI: Boolean = true
 
   def clearFileLocalCopy(path: String): Unit = localFiles.synchronized {
     for (localCopy <- localFiles.remove(path)) {
@@ -78,10 +72,10 @@ class HdfsIO private (val uri: String) extends Serializable {
       decompress: Boolean = true,
       retries: Int = 10,
       sleepMillis: Int = 1000,
-      strategy: HdfsIO.LoadingStrategy = HdfsIO.defaultLoadingStrategy
+      strategy: DfsIO.LoadingStrategy = HdfsIO.defaultLoadingStrategy
   ): InputStream = {
     val loadingStrategy =
-      if (strategy == HdfsIO.LoadingStrategy.Dynamic) {
+      if (strategy == DfsIO.LoadingStrategy.Dynamic) {
         val fileSize = this.length(path)
         val copyLocalThreshold = fileSize.toDouble * HdfsIO.dynamicCopyLocalThreshold
         if (localFiles.contains(path)) HdfsIO.LoadingStrategy.CopyLocal
@@ -141,23 +135,6 @@ class HdfsIO private (val uri: String) extends Serializable {
     } else buffered
   }
 
-  def access[R](
-      path: String,
-      offset: Long = 0,
-      length: Long = 0,
-      decompress: Boolean = true,
-      retries: Int = 60,
-      sleepMillis: Int = 1000 * 60,
-      strategy: HdfsIO.LoadingStrategy = HdfsIO.defaultLoadingStrategy
-  )(action: InputStream => R): R = {
-    val in = open(path, offset, length, decompress, retries, sleepMillis, strategy)
-    try {
-      action(in)
-    } finally {
-      Try(in.close())
-    }
-  }
-
   def copyFromLocal(src: String, dst: String, move: Boolean = false, overwrite: Boolean = false, replication: Short = 0): Unit = {
     val dstPath = new Path(dst)
     val exists = fs.exists(dstPath)
@@ -172,16 +149,11 @@ class HdfsIO private (val uri: String) extends Serializable {
     if (dstReplication > 1) fs.setReplication(dstPath, dstReplication)
   }
 
-  def copyToLocal(src: String, dst: String): Unit = fs.copyToLocalFile(new Path(src), new Path(dst))
+  override def copyToLocal(src: String, dst: String): Unit = fs.copyToLocalFile(new Path(src), new Path(dst))
 
   def rename(src: String, dst: String): Unit = fs.rename(new Path(src), new Path(dst))
 
   def length(path: String): Long = fs.getFileStatus(new Path(path)).getLen
-
-  def lines(path: String, n: Int = -1, offset: Long = 0): Seq[String] = access(path, offset) { in =>
-    val lines = IOUtil.lines(in)
-    if (n < 0) lines.toList else lines.take(n).toList
-  }
 
   def files(path: String, recursive: Boolean = true): Iterator[String] = {
     val glob = fs.globStatus(new Path(path))
@@ -195,26 +167,6 @@ class HdfsIO private (val uri: String) extends Serializable {
     if (status == null || status.isEmpty || (status.length == 1 && status.head.isDirectory)) path else p.getParent.toString
   }
 
-  def createTmpPath(prefix: String = tmpFilePrefix, path: String = tmpHdfsPath, deleteOnExit: Boolean = true): String = {
-    var rnd = System.currentTimeMillis + "-" + Random.nextInt.abs
-    var tmpPath: Path = null
-    while ({
-      tmpPath = new Path(path, prefix + rnd)
-      fs.exists(tmpPath) || !fs.mkdirs(tmpPath)
-    }) rnd = System.currentTimeMillis + "-" + Random.nextInt.abs
-    if (deleteOnExit) fs.deleteOnExit(tmpPath)
-    tmpPath.toString
-  }
-
-  def tmpPath[R](action: String => R): R = {
-    val path = createTmpPath()
-    try {
-      action(path)
-    } finally {
-      delete(path)
-    }
-  }
-
   def delete(path: String): Unit = if (exists(path)) {
     val p = new Path(path)
     val success = fs.delete(p, true)
@@ -222,13 +174,6 @@ class HdfsIO private (val uri: String) extends Serializable {
   }
 
   def exists(path: String): Boolean = fs.exists(new Path(path))
-
-  def ensureOutDir(path: String, ensureNew: Boolean = true): Unit = {
-    if (ensureNew && exists(path)) Common.printThrow("Path exists: " + path)
-    fs.mkdirs(new Path(path))
-  }
-
-  def ensureNewFile(path: String): Unit = { if (exists(path)) Common.printThrow("File exists: " + path) }
 
   def writer(path: String, overwrite: Boolean = false, append: Boolean = false, replication: Short = 0): HdfsFileWriter = HdfsFileWriter(path, overwrite, append, replication)
 
@@ -240,47 +185,14 @@ class HdfsIO private (val uri: String) extends Serializable {
       else if (append) fs.append(new Path(path))
       else {
         val fsPath = new Path(path)
-        if (temporary) fs.create(fsPath, overwrite, bufferSize, tmpFileReplication, fs.getDefaultBlockSize(fsPath)) else fs.create(fsPath, overwrite)
+        if (temporary) fs.create(fsPath, overwrite, bufferSize, tmpFileReplication, getBlockSize(path)) else fs.create(fsPath, overwrite)
       }
     if (compress && path.toLowerCase.endsWith(GzipExt)) new GZIPOutputStream(out) else out
   }
 
-  def writeLines(path: String, lines: => TraversableOnce[String], overwrite: Boolean = false, compress: Boolean = true, useWriter: Boolean = true, skipIfExists: Boolean = false): Long = {
-    if (skipIfExists && exists(path)) return 0L
-    val stream = out(path, overwrite, compress, useWriter)
-    val processed = IOUtil.writeLines(stream, lines)
-    Try(stream.close())
-    processed
-  }
+  override def mkdirs(path: String): Boolean = fs.mkdirs(new Path(path))
 
-  def concat(files: Seq[String], outPath: String, append: Boolean = false): Unit = {
-    val stream = out(outPath, compress = false, append = append)
-    for (file <- files) access(file, decompress = false) { in => IOUtil.copy(in, stream) }
-    Try(stream.close())
-  }
+  override def deleteOnExit(path: String): Unit = fs.deleteOnExit(new Path(path))
 
-  def iterLines(path: String, readFully: Boolean = false): CleanupIterator[String] = CleanupIterator.flatten {
-    files(path).map { file =>
-      val in = if (readFully) open(file, length = -1) else open(file)
-      IteratorUtil.cleanup(IOUtil.lines(in), in.close)
-    }
-  }
-
-  def countLines(path: String, copyLocal: Boolean = false): Long = IteratorUtil.count(iterLines(path, readFully = copyLocal))
-
-  def collectLines(path: String): Seq[String] = files(path).toSeq.par.flatMap { file =>
-    val in = open(file)
-    IteratorUtil.cleanup(IOUtil.lines(in), in.close)
-  }.seq
-
-  def collectDistinctLines(path: String, parallel: Boolean = true, map: String => Option[String] = Some(_), lineBuffer: Int = HdfsIO.DefaultLineBuffer): Set[String] =
-    if (parallel) {
-      val parallel = files(path).toSet.par
-      parallel.flatMap { file =>
-        val in = open(file)
-        IteratorUtil.cleanup(IOUtil.lines(in), in.close).flatMap(l => map(l)).grouped(lineBuffer).map(_.toSet).foldLeft(Set.empty[String])(_ ++ _)
-      }.seq
-    } else iterLines(path).flatMap(l => map(l)).grouped(lineBuffer).map(_.toSet).foldLeft(Set.empty[String])(_ ++ _)
-
-  def touch(path: String): Unit = Common.touch(out(path, useWriter = false, append = exists(path), compress = false))(_.write(Array.empty[Byte])).close()
+  override def getBlockSize(path: String): Long = fs.getDefaultBlockSize(new Path(path))
 }

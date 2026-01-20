@@ -1,6 +1,6 @@
 package org.archive.webservices.sparkling.indexed
 
-import org.archive.webservices.sparkling.io.{HdfsIO, IOUtil, PrimitiveHdfsBackedMap}
+import org.archive.webservices.sparkling.io.{DfsIO, IOUtil, PrimitiveHdfsBackedMap}
 import org.archive.webservices.sparkling.util.{CleanupIterator, IteratorUtil, RddUtil}
 
 class HdfsIndexBackedMap (val path: String, val key: String => String, startOffset: (String, String) => Long, groupFiles: Int = 1) extends PrimitiveHdfsBackedMap {
@@ -10,7 +10,7 @@ class HdfsIndexBackedMap (val path: String, val key: String => String, startOffs
   private val files: Seq[(Seq[String], String)] = {
     RddUtil.loadTextFiles(
       path,
-      strategy = HdfsIO.LoadingStrategy.Remote,
+      strategy = DfsIO.LoadingStrategy.Remote,
       groupFiles = groupFiles,
       sorted = groupFiles > 1
     ).mapPartitions { fileGroup =>
@@ -24,7 +24,7 @@ class HdfsIndexBackedMap (val path: String, val key: String => String, startOffs
   private def iterFiles(files: Seq[String], beforeKey: Option[String] = None): CleanupIterator[(String, Iterator[String])] = {
     CleanupIterator.flatten(files.zipWithIndex.toIterator.map { case (file, idx) =>
       val offset = if (idx == 0 && beforeKey.isDefined) startOffset(file, beforeKey.get) else 0L
-      val in = HdfsIO.open(file, offset = offset)
+      val in = DfsIO.open(file, offset = offset)
       IteratorUtil.cleanup(IOUtil.lines(in).filter(_.trim.nonEmpty).map(l => (file, key(l), l)), in.close)
     }).chain { lines =>
       val grouped = IteratorUtil.groupSortedBy(lines)(_._2)

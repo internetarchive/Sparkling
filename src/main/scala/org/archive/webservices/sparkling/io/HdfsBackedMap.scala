@@ -11,7 +11,7 @@ object HdfsBackedMap {
   private val cache = collection.mutable.Map.empty[(String, String), ManagedVal[ValueSupplier[InputStream]]]
   private var cached = List.empty[(String, String)]
 
-  var hdfsLoadingStrategy: HdfsIO.LoadingStrategy = prop(HdfsIO.defaultLoadingStrategy)(hdfsLoadingStrategy, hdfsLoadingStrategy = _)
+  var hdfsLoadingStrategy: DfsIO.LoadingStrategy = prop(HdfsIO.defaultLoadingStrategy)(hdfsLoadingStrategy, hdfsLoadingStrategy = _)
 
   def cache(key: String, file: String, lines: ManagedVal[ValueSupplier[InputStream]]): CleanupIterator[String] = cache.synchronized {
     if (cache.size >= maxCacheSize) {

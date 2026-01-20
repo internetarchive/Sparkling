@@ -14,18 +14,18 @@ class HdfsFileWriter private (accessContext: AccessContext, filename: String, ap
 
   Log.info("Writing to temporary local file " + file.getCanonicalPath + " (" + filename + ")...")
 
-  val out = IOUtil.fileOut(file)
+  val out: OutputStream = IOUtil.fileOut(file)
 
   override def close(): Unit = {
     Try { out.close() }
     Log.info("Copying from temporary file " + file.getCanonicalPath + " to " + filename + "...")
     if (append) {
       val in = new FileInputStream(file)
-      val appendOut = accessContext.hdfsIO.fs.append(new Path(filename))
+      val appendOut = HdfsIO.fs.append(new Path(filename))
       IOUtil.copy(in, appendOut)
       appendOut.close()
       in.close()
-    } else accessContext.hdfsIO.copyFromLocal(file.getCanonicalPath, filename, move = true, overwrite = true, replication)
+    } else HdfsIO.copyFromLocal(file.getCanonicalPath, filename, move = true, overwrite = true, replication)
     if (!file.delete()) file.deleteOnExit()
     Log.info("Done. (" + filename + ")")
   }
@@ -38,7 +38,7 @@ class HdfsFileWriter private (accessContext: AccessContext, filename: String, ap
 
 object HdfsFileWriter {
   def apply(filename: String, overwrite: Boolean = false, append: Boolean = false, replication: Short = 0)(implicit accessContext: AccessContext = AccessContext.default): HdfsFileWriter = {
-    if (!overwrite && !append) accessContext.hdfsIO.ensureNewFile(filename)
+    if (!overwrite && !append) HdfsIO.ensureNewFile(filename)
     new HdfsFileWriter(accessContext, filename, append, replication)
   }
 }

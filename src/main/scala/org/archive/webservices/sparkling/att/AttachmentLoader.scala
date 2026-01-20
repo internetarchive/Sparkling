@@ -4,7 +4,7 @@ import java.io.InputStream
 
 import org.apache.spark.rdd.RDD
 import org.archive.webservices.sparkling.att
-import org.archive.webservices.sparkling.io.{HdfsIO, IOUtil}
+import org.archive.webservices.sparkling.io.{DfsIO, IOUtil}
 import org.archive.webservices.sparkling.util.{IteratorUtil, RddUtil, StringUtil}
 
 import scala.util.Try
@@ -12,11 +12,11 @@ import scala.util.Try
 class AttachmentLoader[A] private (val filePath: String, val id: String, val attPath: String, parse: String => A) {
   import AttachmentLoader._
 
-  lazy val exists: Boolean = HdfsIO.exists(attPath)
+  lazy val exists: Boolean = DfsIO.exists(attPath)
 
   private var attachmentIn: Option[InputStream] = None
   private lazy val lines = (if (exists) {
-                              val in = HdfsIO.open(attPath)
+                              val in = DfsIO.open(attPath)
                               attachmentIn = Some(in)
                               val lines = IOUtil.lines(in).filter(!_.trim.startsWith(CommentPrefix))
                               IteratorUtil.cleanup(lines, in.close)

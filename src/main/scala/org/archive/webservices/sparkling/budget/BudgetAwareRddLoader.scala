@@ -4,7 +4,7 @@ import java.io.InputStream
 
 import org.apache.spark.rdd.RDD
 import org.archive.webservices.sparkling.Sparkling
-import org.archive.webservices.sparkling.io.{HdfsIO, IOUtil}
+import org.archive.webservices.sparkling.io.{DfsIO, IOUtil}
 import org.archive.webservices.sparkling.util.{IteratorUtil, RddUtil}
 
 import scala.reflect.ClassTag
@@ -30,7 +30,7 @@ object BudgetAwareRddLoader {
       var break = false
       IteratorUtil.cleanup(
         files.toIterator.flatMap { file =>
-          val in = HdfsIO.open(file)
+          val in = DfsIO.open(file)
           streams :+= in
           IteratorUtil.cleanup(
             getRecords(in).toIterator,

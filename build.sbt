@@ -24,7 +24,7 @@ lazy val sparkling = (project in file(".")).settings(
     failureaccess,
     "commons-codec" % "commons-codec" % "1.12",
     "org.apache.commons" % "commons-compress" % "1.14",
-    "org.apache.hadoop" % "hadoop-client" % "2.6.0" % "provided",
+    "org.apache.hadoop" % "hadoop-client" % "2.6.4" % "provided",
     "org.apache.spark" %% "spark-core" % "2.4.5" % "provided",
     "org.apache.spark" %% "spark-sql" % "2.4.5" % "provided",
     "joda-time" % "joda-time" % "2.10",
@@ -35,9 +35,9 @@ lazy val sparkling = (project in file(".")).settings(
     "org.apache.ignite" % "ignite-core" % "2.7.6" % "provided",
     "edu.stanford.nlp" % "stanford-corenlp" % "4.3.1" % "provided",
     "org.brotli" % "dec" % "0.1.2",
-    "sh.almond" %% "ammonite-spark" % "0.10.1" % "provided",
-    ("com.lihaoyi" % "ammonite-interp" % "1.7.4" % "provided").cross(CrossVersion.full),
-    ("com.lihaoyi" % "ammonite-repl" % "1.7.4" % "provided").cross(CrossVersion.full),
+    "sh.almond" %% "ammonite-spark" % "0.13.3" % "provided",
+    ("com.lihaoyi" % "ammonite-interp" % "2.5.4" % "provided").cross(CrossVersion.full),
+    ("com.lihaoyi" % "ammonite-repl" % "2.5.4" % "provided").cross(CrossVersion.full),
     "com.amazonaws" % "aws-java-sdk" % "1.7.4" % "provided",
     "org.nanohttpd" % "nanohttpd" % "2.3.1"
   ) ++ Seq("io.circe" %% "circe-core", "io.circe" %% "circe-generic", "io.circe" %% "circe-parser").map(_ % circeVersion)

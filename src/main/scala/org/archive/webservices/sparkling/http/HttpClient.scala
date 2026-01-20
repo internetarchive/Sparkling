@@ -73,7 +73,9 @@ object HttpClient {
       val bounded = if (length < 0) stream else new BoundedInputStream(stream, length)
       val in = new BufferedInputStream(new CleanupInputStream(bounded, connection.disconnect))
       Common.cleanup({
-        val responseHeaders = connection.getHeaderFields.asScala.toSeq.flatMap { case (k, v) => v.asScala.map((if (k == null) "" else k) -> _) }
+        val responseHeaders = connection.getHeaderFields.asScala.toSeq.flatMap { case (k, v) =>
+          v.asScala.map((if (k == null) "" else k) -> _)
+        }.filter(_._1.toLowerCase != "transfer-encoding") // transfer-encoding is handled by java libraries
         val message = new HttpMessage(connection.getHeaderField(0), responseHeaders, in)
         action(message)
       })(() => if (close) in.close())

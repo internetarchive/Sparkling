@@ -7,7 +7,7 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.{SparkContext, TaskContext}
 import org.archive.webservices.sparkling.cdx.CdxRecord
 import org.archive.webservices.sparkling.http.HttpMessage
-import org.archive.webservices.sparkling.io.{FileOutputPool, HdfsIO, TypedInOut}
+import org.archive.webservices.sparkling.io.{FileOutputPool, DfsIO, TypedInOut}
 import org.archive.webservices.sparkling.util.{CollectionUtil, RddUtil, SparkUtil, StringUtil}
 import org.archive.webservices.sparkling.warc.WarcRecord
 
@@ -183,10 +183,10 @@ object Sparkling {
     println("Checkpointing enabled (" + dir + ")")
   }
 
-  def enableCheckpointing(): Unit = enableCheckpointing(HdfsIO.createTmpPath())
+  def enableCheckpointing(): Unit = enableCheckpointing(DfsIO.createTmpPath())
 
   def clearCheckpointDir(id: String): Unit = clearCheckpointDir(Some(id))
-  def clearCheckpointDir(id: Option[String] = None): Unit = if (_checkpointDir.isDefined) { HdfsIO.delete(if (id.isDefined) checkpointDir(id.get).get else _checkpointDir.get) }
+  def clearCheckpointDir(id: Option[String] = None): Unit = if (_checkpointDir.isDefined) { DfsIO.delete(if (id.isDefined) checkpointDir(id.get).get else _checkpointDir.get) }
 
   def disableCheckpointing(clear: Boolean = true): Unit = {
     if (clear) clearCheckpointDir()
@@ -215,11 +215,11 @@ object Sparkling {
       val result = action(dir)
       if (autoClearCheckpoints) clearCheckpointDir(id)
       result
-    case None => HdfsIO.tmpPath(action)
+    case None => DfsIO.tmpPath(action)
   }
 
   def getCheckpointOrTmpDir[A](id: String): String = checkpointDir(id) match {
     case Some(dir) => dir
-    case None      => HdfsIO.createTmpPath()
+    case None      => DfsIO.createTmpPath()
   }
 }

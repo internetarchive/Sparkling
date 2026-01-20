@@ -7,7 +7,7 @@ import org.apache.spark.storage.StorageLevel
 import org.archive.webservices.sparkling.Sparkling
 import org.archive.webservices.sparkling.html.{HtmlProcessor, LinkExtractor}
 import org.archive.webservices.sparkling.http.HttpMessage
-import org.archive.webservices.sparkling.io.{HdfsIO, IOUtil}
+import org.archive.webservices.sparkling.io.{DfsIO, IOUtil}
 import org.archive.webservices.sparkling.util.{IteratorUtil, RddUtil, SurtUtil}
 import org.archive.webservices.sparkling.warc.WarcRecord
 
@@ -108,7 +108,7 @@ object LGA {
   def parsedToBigGraph[R](parsed: RDD[((LgaLabel, String), Iterator[LgaLabel])])(saveAndLoadMap: RDD[LgaNode] => RDD[LgaNode])(graph: RDD[LgaAdjacencyList] => R): R = {
     val numPartitions = parsed.getNumPartitions
     val (flat, surtIds) = flatMap(parsed)(saveAndLoadMap)
-    HdfsIO.tmpPath { tmp =>
+    DfsIO.tmpPath { tmp =>
       val tmpMapDir = tmp + "/map.gz"
       val sortedSurt = RddUtil.sortByAndWithinPartitions(surtIds, numPartitions)(_._1)
       RddUtil.saveAsTextFile(sortedSurt.map{case (surt, id) => surt + "\t" + id}, tmpMapDir)

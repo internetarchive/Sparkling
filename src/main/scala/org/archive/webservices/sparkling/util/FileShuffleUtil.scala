@@ -7,8 +7,8 @@ import org.apache.commons.io.output.CountingOutputStream
 import org.apache.hadoop.fs.Path
 import org.apache.spark.HashPartitioner
 import org.apache.spark.rdd.RDD
-import org.archive.webservices.sparkling.{Sparkling, _}
-import org.archive.webservices.sparkling.io.{HdfsIO, IOUtil, NonClosingOutputStream, TypedInOut}
+import org.archive.webservices.sparkling._
+import org.archive.webservices.sparkling.io.{DfsIO, IOUtil, NonClosingOutputStream, TypedInOut}
 import org.archive.webservices.sparkling.logging.{Log, LogContext}
 
 import scala.reflect.ClassTag
@@ -80,7 +80,7 @@ object FileShuffleUtil {
           }
           val filesCount = files.size
           val tmpPath = tmpDir + "/" + StringUtil.padNum(idx, 5) + GzipExt
-          val out = HdfsIO.out(tmpPath, compress = false, overwrite = true, temporary = true)
+          val out = DfsIO.out(tmpPath, compress = false, overwrite = true, temporary = true)
           var offset = 0L
           var merged = 0L
           IteratorUtil.cleanup(
@@ -117,7 +117,7 @@ object FileShuffleUtil {
       pointersSeq.sortBy(_.hashCode).toIterator.flatMap { case (_, (file, offset, length)) =>
         processing += 1
         Log.info(s"Reading part $processing / $numPointers...")
-        val in = HdfsIO.open(file, offset, length)
+        val in = DfsIO.open(file, offset, length)
         IteratorUtil.cleanup(inout.in(in), in.close)
       }
     }
@@ -247,7 +247,7 @@ object FileShuffleUtil {
         val buffered = records.buffered
         val buckets = bucketBoundaries.toIterator.map(b => IteratorUtil.takeWhile(buffered)(partitionBy(_) < b)) ++ Iterator(buffered)
         val partitionOutPath = new Path(checkpointDir, StringUtil.padNum(idx, 5) + Sparkling.GzipExt).toString
-        val counting = new CountingOutputStream(HdfsIO.out(partitionOutPath, compress = false, overwrite = true, temporary = true))
+        val counting = new CountingOutputStream(DfsIO.out(partitionOutPath, compress = false, overwrite = true, temporary = true))
         var offset = 0L
         IteratorUtil.cleanup(
           buckets.zipWithIndex.filter(_._1.hasNext).map { case (bucket, i) =>
@@ -269,7 +269,7 @@ object FileShuffleUtil {
       val sorted = RddUtil.parallelize(buckets).mapPartitions { pointers =>
         val ordering = implicitly[Ordering[String]]
         val chunks = pointers.toSeq.flatten.map { case (_, path, offset, length) =>
-          val buffered = HdfsIO.access(path, offset = offset, length = length) { in => IOUtil.copyToBuffer(in, bufferSize = 1.mb.toInt).get.get }
+          val buffered = DfsIO.access(path, offset = offset, length = length) { in => IOUtil.copyToBuffer(in, bufferSize = 1.mb.toInt).get.get }
           IteratorUtil.cleanup(IOUtil.lines(buffered), buffered.close)
         }
         val chunkOrdering = Ordering.by[CleanupIterator[String], String](iter => sortBy(iter.head)).reverse
@@ -295,9 +295,9 @@ object FileShuffleUtil {
 
   def mergeStringsByIndexPartitions(path: String, partitions: List[(Set[String], Long)], sortedBy: String => String = identity, prefix: String => String = identity): RDD[String] = {
     RddUtil.lazyFlatMap(RddUtil.parallelize(partitions)) { case (keys, count) =>
-      val chunks = HdfsIO.files(path + "/*" + Sparkling.IdxExt).map { filename =>
+      val chunks = DfsIO.files(path + "/*" + Sparkling.IdxExt).map { filename =>
         val dataFile = filename.stripSuffix(Sparkling.IdxExt)
-        val pointers = HdfsIO.iterLines(filename, readFully = true).dropWhile { str =>
+        val pointers = DfsIO.iterLines(filename, readFully = true).dropWhile { str =>
           val key = prefix(StringUtil.prefixBySeparator(str, "\t"))
           !keys.contains(key)
         }.takeWhile { str =>
@@ -307,7 +307,7 @@ object FileShuffleUtil {
         if (pointers.hasNext) {
           val first = pointers.next
           val (offset, length) = (first.head, first(1) + pointers.map(_(1)).sum)
-          val buffered = HdfsIO.access(dataFile, offset = offset, length = length) { in => IOUtil.copyToBuffer(in, bufferSize = 1.mb.toInt).get.get }
+          val buffered = DfsIO.access(dataFile, offset = offset, length = length) { in => IOUtil.copyToBuffer(in, bufferSize = 1.mb.toInt).get.get }
           IteratorUtil.cleanup(IOUtil.lines(buffered), buffered.close)
         } else CleanupIterator.empty[String]
       }.toList

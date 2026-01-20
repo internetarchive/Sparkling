@@ -5,7 +5,7 @@ import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 import org.archive.webservices.sparkling.AccessContext
-import org.archive.webservices.sparkling.io.{HdfsIO, IOUtil}
+import org.archive.webservices.sparkling.io.{DfsIO, IOUtil}
 import org.archive.webservices.sparkling.util.{CleanupIterator, IteratorUtil, ManagedVal, MultiBufferedIterator, RddUtil}
 
 import java.io.InputStream
@@ -62,7 +62,7 @@ object PrefixIndexLoader {
 
         firstLinesBroadcast = Some(sc.broadcast(firstLines))
 
-        RddUtil.loadFilesLocality(path).filter(f => relevantFiles.contains(f)).map(f => (f, HdfsIO.iterLines(f)))
+        RddUtil.loadFilesLocality(path).filter(f => relevantFiles.contains(f)).map(f => (f, DfsIO.iterLines(f)))
       }).coalesce(parallelism).flatMap { case (indexFile, lines) =>
           val nextFileFirstLine = firstLinesBroadcast.flatMap(_.value.dropWhile(_._1 <= indexFile).headOption.map(_._2))
           lines.chain { l =>
@@ -84,7 +84,7 @@ object PrefixIndexLoader {
 
   def loadIndex(path: String, prefixes: SortedPrefixSeq, getFileOffsetLength: String => (String, Long, Long), mergePointers: Int, sorted: Boolean = false)
                (implicit accessContext: AccessContext = AccessContext.default): ManagedVal[RDD[RecordPointer]] = {
-    loadIndex(path, prefixes, getFileOffsetLength, if (mergePointers == 0) DefaultMergePointers else mergePointers, HdfsIO.fs.getDefaultBlockSize(new Path(path)), sorted)
+    loadIndex(path, prefixes, getFileOffsetLength, if (mergePointers == 0) DefaultMergePointers else mergePointers, DfsIO.getBlockSize(path), sorted)
   }
 
   def loadIndex(
@@ -117,7 +117,7 @@ object PrefixIndexLoader {
       prefixBroadcast,
       getFileOffsetLength,
       if (mergePointers == 0) if (repartition > 0) DefaultMergePointers else -1 else mergePointers,
-      if (repartition == 0) HdfsIO.fs.getDefaultBlockSize(new Path(indexPath)) else 0,
+      if (repartition == 0) DfsIO.getBlockSize(indexPath) else 0,
       sorted = sorted,
       cache = cache,
       linesPerPartition = indexLinesPerPartition
@@ -135,7 +135,7 @@ object PrefixIndexLoader {
           }
         } else index
       repartitioned.flatMap { pointer =>
-        val in = HdfsIO.open(pointer.path, pointer.position.offset, pointer.position.length)
+        val in = DfsIO.open(pointer.path, pointer.position.offset, pointer.position.length)
         IteratorUtil.cleanup(IndexUtil.filter(IOUtil.lines(in), MultiBufferedIterator(prefixBroadcast.value.drop(pointer.prefixIdx))).map(_._1).filter(filter), in.close)
       }
     }, _ => prefixBroadcast.unpersist())
@@ -163,7 +163,7 @@ object PrefixIndexLoader {
   )(implicit accessContext: AccessContext = AccessContext.default): RDD[D] = {
     RddUtil.loadBinary(path, decompress = false, close = false, sorted = sorted) { (file, in) =>
       val indexPath = getIndexPath(file)
-      val splitStreams = IndexUtil.splitStream(in, HdfsIO.lines(indexPath), prefixBroadcast.value, getOffsetLength)
+      val splitStreams = IndexUtil.splitStream(in, DfsIO.lines(indexPath), prefixBroadcast.value, getOffsetLength)
       if (file.toLowerCase.endsWith(GzipExt)) {
         val unzipped = splitStreams.map(stream => IOUtil.decompress(stream))
         IteratorUtil.cleanup(load(unzipped), in.close)
@@ -224,7 +224,7 @@ object PrefixIndexLoader {
       prefixBroadcast,
       getFileOffsetLength,
       if (mergePointers == 0) if (repartition > 0) DefaultMergePointers else -1 else mergePointers,
-      if (repartition == 0) HdfsIO.fs.getDefaultBlockSize(new Path(indexPath)) else 0,
+      if (repartition == 0) DfsIO.getBlockSize(indexPath) else 0,
       groupByPrefix = partitionByPrefix,
       sorted = sorted,
       cache = cache,
@@ -232,7 +232,7 @@ object PrefixIndexLoader {
     ).map({ index =>
       val prefixBc = prefixBroadcast
 
-      val files = dataPath.map(HdfsIO.files(_)).getOrElse(RddUtil.collectDistinct(RddUtil.distinctSorted(index.map(_.path)))).toSeq.sorted
+      val files = dataPath.map(DfsIO.files(_)).getOrElse(RddUtil.collectDistinct(RddUtil.distinctSorted(index.map(_.path)))).toSeq.sorted
       filesBroadcast = Some(sc.broadcast(files))
 
       val repartitioned =
@@ -256,16 +256,16 @@ object PrefixIndexLoader {
           if (fileIdx < 0 || !p.hasNext) Iterator.empty
           else {
             val prefixes = MultiBufferedIterator(p)
-            val in = HdfsIO.open(filePath, offset = pointer.position.offset, length = pointer.position.length, decompress = false)
+            val in = DfsIO.open(filePath, offset = pointer.position.offset, length = pointer.position.length, decompress = false)
 
             val lines = IteratorUtil.cleanup(IOUtil.lines(in, Some(filePath)), in.close)
 
             val overLines = CleanupIterator.lazyIter {
-              val in = HdfsIO.open(filePath, offset = pointer.position.offset + pointer.position.length)
+              val in = DfsIO.open(filePath, offset = pointer.position.offset + pointer.position.length)
               CleanupIterator.combine(
                 IteratorUtil.cleanup(IOUtil.lines(in), in.close),
                 CleanupIterator.flatten(files.drop(fileIdx + 1).toIterator.map { file =>
-                  val in = HdfsIO.open(file)
+                  val in = DfsIO.open(file)
                   IteratorUtil.cleanup(IOUtil.lines(in), in.close)
                 })
               )

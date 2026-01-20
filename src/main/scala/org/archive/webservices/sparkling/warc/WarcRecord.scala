@@ -72,10 +72,11 @@ object WarcRecord {
   def defaultDigestHash(in: InputStream): String = "sha1:" + DigestUtil.sha1Base32(in)
 
   def get(in: InputStream, handleArc: Boolean = true, compressed: Boolean = true)(implicit context: DecompressionContext = null): Option[WarcRecord] = {
+    val markSupported = IOUtil.supportMark(in)
     next(if (compressed) {
-      if (context == null) Compression.decompress(in)
-      else context.decompress(in)
-    } else in, handleArc)
+      if (context == null) Compression.decompress(markSupported)
+      else context.decompress(markSupported)
+    } else markSupported, handleArc)
   }
 
   def next(in: InputStream, handleArc: Boolean = true): Option[WarcRecord] = {

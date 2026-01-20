@@ -71,7 +71,6 @@ object Common {
         case e: Exception =>
           for (o <- obj) Try(cleanup(o))
           Log.error(log(obj, retry, e))
-          e.printStackTrace()
           lastException = e
       }
     }

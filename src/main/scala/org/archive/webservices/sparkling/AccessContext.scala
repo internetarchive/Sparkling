@@ -1,10 +1,10 @@
 package org.archive.webservices.sparkling
 
-import org.archive.webservices.sparkling.io.HdfsIO
+import org.archive.webservices.sparkling.io.{DfsIO, HdfsIO}
 
-case class AccessContext (hdfsIO: HdfsIO)
+case class AccessContext (dfsIO: DfsIO)
 
 object AccessContext {
   lazy val default: AccessContext = apply(HdfsIO.default)
-  def apply(hdfsIO: HdfsIO): AccessContext = new AccessContext(hdfsIO)
+  def apply(dfsIO: DfsIO): AccessContext = new AccessContext(dfsIO)
 }

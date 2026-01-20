@@ -2,7 +2,7 @@ package org.archive.webservices.sparkling.http
 
 import fi.iki.elonen.NanoHTTPD
 import fi.iki.elonen.NanoHTTPD._
-import org.archive.webservices.sparkling.io.{CatchingInputStream, CleanupInputStream}
+import org.archive.webservices.sparkling.io.{CatchingInputStream, CleanupInputStream, IOUtil}
 import org.archive.webservices.sparkling.warc.WarcRecord
 
 import java.io.{ByteArrayInputStream, FilterOutputStream, InputStream, OutputStream}
@@ -45,6 +45,39 @@ class LocalHttpServer(val port: Int) extends NanoHTTPD(port) {
 
   def setServe(method: NanoHTTPD.IHTTPSession => Response): Unit = serveMethod = method
 
+  def setServeWarcBody(warc: String => Option[WarcRecord]): Unit = setServeWarcBody(warc, close = false)
+
+  def setServeWarcBody(warc: String => Option[WarcRecord], close: Boolean): Unit = {
+    serveMethod = { s =>
+      val q = Option(s.getQueryParameterString).map(_.trim).filter(_.nonEmpty).map("?" + _).getOrElse("")
+      val url = s.getUri.stripPrefix("/") + q
+      Try(warc(url)).toOption.flatten match {
+        case Some(warc) =>
+          warc.http match {
+            case Some(http) =>
+              Option(Response.Status.lookup(http.status)).map { status =>
+                val mimeType = http.headerMap.get("content-type").orNull
+                val data = new CleanupInputStream(http.body, () => {
+                  if (close) warc.in.close() else warc.close()
+                })
+                val response = new LocalHttpServerResponse(status, mimeType, data, -1) //new CatchingInputStream(data), -1) // -1 == chunked
+
+                for (location <- http.headerMap.get("location")) response.addHeader("Location", location)
+
+                response.addHeader(LocalHttpServer.AccessControlAllowOriginHeader, "*")
+                response.addHeader("Cache-Control", "no-store, no-cache, must-revalidate")
+                response.addHeader("Pragma", "no-cache")
+                response.addHeader("Expires", "0")
+
+                response
+              }.getOrElse(notFound)
+            case None => notFound
+          }
+        case None => notFound
+      }
+    }
+  }
+
   def setServeWarc(warc: String => Option[WarcRecord]): Unit = setServeWarc(warc, close = false)
 
   def setServeWarc(warc: String => Option[WarcRecord], close: Boolean): Unit = {
@@ -65,8 +98,8 @@ class LocalHttpServer(val port: Int) extends NanoHTTPD(port) {
                 for {
                   (key, value) <- http.headers if key != null && value != null && !LocalHttpServer.FilterWarcHeaders.contains(key)
                 } response.addHeader(key, value)
-                response.addHeader(LocalHttpServer.AccessControlAllowCredentialsHeader, "true")
 
+                response.addHeader(LocalHttpServer.AccessControlAllowCredentialsHeader, "true")
                 response.addHeader("Cache-Control", "no-store, no-cache, must-revalidate")
                 response.addHeader("Pragma", "no-cache")
                 response.addHeader("Expires", "0")

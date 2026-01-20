@@ -2,7 +2,7 @@ package org.archive.webservices.sparkling.budget
 
 import org.apache.hadoop.io.compress.GzipCodec
 import org.apache.spark.rdd.RDD
-import org.archive.webservices.sparkling.io.HdfsIO
+import org.archive.webservices.sparkling.io.DfsIO
 import org.archive.webservices.sparkling.util.{PrimaryKeyPartitioner, RddUtil}
 
 import scala.reflect.ClassTag
@@ -57,7 +57,7 @@ object BudgetRddManager {
   def reloadByBudget(rdd: RDD[String], budget: Long)(getRecordCost: String => Long)(action: RDD[String] => Unit): Unit = reloadByBudget(rdd, budget, (s: String) => s)(getRecordCost)(action)
 
   def reloadByBudget[D: ClassTag, R](rdd: RDD[String], budget: Long, getRecord: String => D)(getRecordCost: D => Long)(action: RDD[D] => R): R = {
-    HdfsIO.tmpPath { tmpPath =>
+    DfsIO.tmpPath { tmpPath =>
       val path = tmpPath + "/dataset.gz"
       rdd.saveAsTextFile(path, classOf[GzipCodec])
       action(BudgetAwareRddLoader.loadTextLines(path, budget, getRecord)(getRecordCost))

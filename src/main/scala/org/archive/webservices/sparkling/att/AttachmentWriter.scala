@@ -2,7 +2,7 @@ package org.archive.webservices.sparkling.att
 
 import java.io.{InputStream, PrintWriter}
 
-import org.archive.webservices.sparkling.io.{HdfsIO, IOUtil}
+import org.archive.webservices.sparkling.io.{DfsIO, IOUtil}
 import org.archive.webservices.sparkling.logging.{Log, LogContext}
 import org.archive.webservices.sparkling.sam.SplitAndMergeJob
 import org.archive.webservices.sparkling.util.{Common, IteratorUtil, PipedProcess, RddUtil}
@@ -16,16 +16,16 @@ class AttachmentWriter[R](read: (String, InputStream) => TraversableOnce[Option[
     val (read, checksum, attPath) = (this.read, this.checksum, this.attPath)
 
     if (repartition > 0) {
-      SplitAndMergeJob.run(path, HdfsIO.dir(path), repartition) { filename =>
+      SplitAndMergeJob.run(path, DfsIO.dir(path), repartition) { filename =>
         val attachmentFile = attPath(filename, id)
-        if (HdfsIO.exists(attachmentFile)) Iterator.empty
-        else HdfsIO.access(filename, decompress = false, length = -1) { in =>
+        if (DfsIO.exists(attachmentFile)) Iterator.empty
+        else DfsIO.access(filename, decompress = false, length = -1) { in =>
           val numPartitions = (IteratorUtil.count(read(filename, in)).toDouble / batchLines).ceil.toInt
           (0 until numPartitions).toIterator.map((attachmentFile, _))
         }
       } { (filename, partition, partitionFile) =>
-        if (HdfsIO.exists(partitionFile)) 0L
-        else HdfsIO.access(filename, decompress = false, length = -1) { in =>
+        if (DfsIO.exists(partitionFile)) 0L
+        else DfsIO.access(filename, decompress = false, length = -1) { in =>
           Log.info("Processing " + filename + " (split " + partition + ")... (" + partitionFile + ")")
           val processed = attachFile(read, checksum, attPath, comments, map, filename, in, partitionFile, partition, batchLines)(attach)
           Log.info("Done.")
@@ -35,7 +35,7 @@ class AttachmentWriter[R](read: (String, InputStream) => TraversableOnce[Option[
     } else {
       RddUtil.loadBinaryLazy(path, decompress = false, readFully = true) { (filename, in) =>
         val attachmentFile = attPath(filename, id)
-        if (HdfsIO.exists(attachmentFile)) None
+        if (DfsIO.exists(attachmentFile)) None
         else {
           Log.info("Processing " + filename + "...")
           val processed = attachFile(read, checksum, attPath, comments, map, filename, in.get, attachmentFile)(attach)
@@ -173,7 +173,7 @@ object AttachmentWriter {
     val (mapped, mappedDup) = (if (partition >= 0 && batchLines > 0) IteratorUtil.drop(mappedIter, partition * batchLines).take(batchLines) else mappedIter).duplicate
     val attached = attach(mapped.flatten.map(_._2))
 
-    val out = IOUtil.print(HdfsIO.out(outFile))
+    val out = IOUtil.print(DfsIO.out(outFile))
 
     if (partition <= 0) for (c <- comments.flatMap(_.split("\\n"))) out.println(AttachmentLoader.CommentPrefix + " " + c)
 

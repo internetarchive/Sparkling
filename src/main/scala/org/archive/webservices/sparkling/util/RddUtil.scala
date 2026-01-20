@@ -76,25 +76,29 @@ object RddUtil {
   def emptyRDD[A: ClassTag]: RDD[A] = sc.parallelize(Seq(false), 1).filter(_ == true).map(_.asInstanceOf[A])
 
   def loadFilesLocality(path: String, groupFiles: Int = 1, setPartitionFiles: Boolean = setPartitionFiles)(implicit accessContext: AccessContext = AccessContext.default): RDD[String] = initPartitions {
-    val rdd = sc.newAPIHadoopFile[NullWritable, Text, FileLocalityInputFormat](accessContext.hdfsIO.uri + "/" + path).map(_._2.toString)
-    if (setPartitionFiles || groupFiles > 1) {
-      val files = HdfsIO.files(path)
-      if (files.isEmpty) emptyRDD
-      else if (groupFiles > 1) {
-        val numFiles = IteratorUtil.count(files)
-        rdd.coalesce((numFiles.toDouble / groupFiles).ceil.toInt)
-      } else {
-        val filesBc = sc.broadcast(files.toSeq.sorted.zipWithIndex.toMap)
-        rdd.mapPartitions { partition =>
-          val fileIdx = filesBc.value
-          partition.flatMap(f => fileIdx.get(f).map((f, _))).map { case (f, idx) => setTaskInFile(idx, f) }.toArray.toIterator
+    if (accessContext.dfsIO.supportsHadoopFileAPI) {
+      val rdd = sc.newAPIHadoopFile[NullWritable, Text, FileLocalityInputFormat](HdfsIO.uri + "/" + path).map(_._2.toString)
+      if (setPartitionFiles || groupFiles > 1) {
+        val files = DfsIO.files(path)
+        if (files.isEmpty) emptyRDD
+        else if (groupFiles > 1) {
+          val numFiles = IteratorUtil.count(files)
+          rdd.coalesce((numFiles.toDouble / groupFiles).ceil.toInt)
+        } else {
+          val filesBc = sc.broadcast(files.toSeq.sorted.zipWithIndex.toMap)
+          rdd.mapPartitions { partition =>
+            val fileIdx = filesBc.value
+            partition.flatMap(f => fileIdx.get(f).map((f, _))).map { case (f, idx) => setTaskInFile(idx, f) }.toArray.toIterator
+          }
         }
-      }
-    } else rdd
+      } else rdd
+    } else {
+      loadFilesSorted(path, groupFiles)
+    }
   }
 
   def loadFilesSorted(path: String, groupFiles: Int = 1)(implicit accessContext: AccessContext = AccessContext.default): RDD[String] = initPartitions {
-    val files = HdfsIO.files(path).toSeq.sorted
+    val files = DfsIO.files(path).toSeq.sorted
     if (files.isEmpty) { emptyRDD }
     else {
       if (groupFiles > 1) { RddUtil.parallelize(files.grouped(groupFiles).toSeq).mapPartitions { partition => partition.flatten } }
@@ -103,16 +107,16 @@ object RddUtil {
   }
 
   def loadFileGroups(path: String, group: String => String)(implicit accessContext: AccessContext = AccessContext.default): RDD[(String, Seq[String])] = {
-    val groups = HdfsIO.files(path).toSeq.groupBy(group).mapValues(_.sorted)
+    val groups = DfsIO.files(path).toSeq.groupBy(group).mapValues(_.sorted)
     parallelize(groups.toSeq)
   }
 
-  def loadTextFileGroups(path: String, group: String => String, readFully: Boolean = false, strategy: HdfsIO.LoadingStrategy = HdfsIO.defaultLoadingStrategy)(implicit accessContext: AccessContext = AccessContext.default): RDD[(String, Iterator[String])] = {
+  def loadTextFileGroups(path: String, group: String => String, readFully: Boolean = false, strategy: DfsIO.LoadingStrategy = HdfsIO.defaultLoadingStrategy)(implicit accessContext: AccessContext = AccessContext.default): RDD[(String, Iterator[String])] = {
     loadFileGroups(path, group).map { case (g, files) =>
       (
         g,
         IteratorUtil.lazyFlatMap(files.toIterator) { file =>
-          val in = HdfsIO.open(file, length = if (readFully) -1 else 0, strategy = strategy)
+          val in = DfsIO.open(file, length = if (readFully) -1 else 0, strategy = strategy)
           IteratorUtil.cleanup(IOUtil.lines(in), in.close)
         }
       )
@@ -120,29 +124,29 @@ object RddUtil {
   }
 
   def loadBinary[A: ClassTag](
-      path: String,
-      decompress: Boolean = true,
-      close: Boolean = true,
-      readFully: Boolean = false,
-      sorted: Boolean = false,
-      strategy: HdfsIO.LoadingStrategy = HdfsIO.defaultLoadingStrategy,
-      repartitionFiles: Int = 0,
-      groupFiles: Int = 1
+                               path: String,
+                               decompress: Boolean = true,
+                               close: Boolean = true,
+                               readFully: Boolean = false,
+                               sorted: Boolean = false,
+                               strategy: DfsIO.LoadingStrategy = HdfsIO.defaultLoadingStrategy,
+                               repartitionFiles: Int = 0,
+                               groupFiles: Int = 1
   )(action: (String, InputStream) => TraversableOnce[A])(implicit accessContext: AccessContext = AccessContext.default): RDD[A] = {
     val files = if (sorted) loadFilesSorted(path, groupFiles = groupFiles) else loadFilesLocality(path, groupFiles = groupFiles)
     val repartitioned = if (repartitionFiles > 0) shuffle(files, repartitionFiles) else files
     lazyFlatMap(repartitioned) { file =>
-      if (close) HdfsIO.access(file, decompress = decompress, length = if (readFully) -1 else 0, strategy = strategy) { in => action(file, in) }
-      else action(file, HdfsIO.open(file, decompress = decompress, length = if (readFully) -1 else 0, strategy = strategy))
+      if (close) DfsIO.access(file, decompress = decompress, length = if (readFully) -1 else 0, strategy = strategy) { in => action(file, in) }
+      else action(file, DfsIO.open(file, decompress = decompress, length = if (readFully) -1 else 0, strategy = strategy))
     }
   }
 
   def loadTyped[A: ClassTag: TypedInOut](
-      path: String,
-      readFully: Boolean = false,
-      sorted: Boolean = false,
-      strategy: HdfsIO.LoadingStrategy = HdfsIO.defaultLoadingStrategy,
-      repartitionFiles: Int = 0
+                                          path: String,
+                                          readFully: Boolean = false,
+                                          sorted: Boolean = false,
+                                          strategy: DfsIO.LoadingStrategy = HdfsIO.defaultLoadingStrategy,
+                                          repartitionFiles: Int = 0
   )(implicit accessContext: AccessContext = AccessContext.default): RDD[A] = {
     val inout = implicitly[TypedInOut[A]]
     RddUtil.loadBinary(path, decompress = true, close = false, readFully = readFully, sorted = sorted, strategy = strategy, repartitionFiles = repartitionFiles) { (_, in) =>
@@ -151,19 +155,19 @@ object RddUtil {
   }
 
   def loadBinaryLazy[A: ClassTag](
-      path: String,
-      decompress: Boolean = true,
-      close: Boolean = true,
-      readFully: Boolean = false,
-      sorted: Boolean = false,
-      strategy: HdfsIO.LoadingStrategy = HdfsIO.defaultLoadingStrategy,
-      repartitionFiles: Int = 0,
-      groupFiles: Int = 1
+                                   path: String,
+                                   decompress: Boolean = true,
+                                   close: Boolean = true,
+                                   readFully: Boolean = false,
+                                   sorted: Boolean = false,
+                                   strategy: DfsIO.LoadingStrategy = HdfsIO.defaultLoadingStrategy,
+                                   repartitionFiles: Int = 0,
+                                   groupFiles: Int = 1
   )(action: (String, ManagedVal[InputStream]) => TraversableOnce[A])(implicit accessContext: AccessContext = AccessContext.default): RDD[A] = {
     val files = if (sorted) loadFilesSorted(path, groupFiles = groupFiles) else loadFilesLocality(path, groupFiles = groupFiles)
     val repartitioned = if (repartitionFiles > 0) shuffle(files, repartitionFiles) else files
     lazyFlatMap(repartitioned) { file =>
-      val lazyIn = Common.lazyValWithCleanup(HdfsIO.open(file, decompress = decompress, length = if (readFully) -1 else 0, strategy = strategy))(_.close)
+      val lazyIn = Common.lazyValWithCleanup(DfsIO.open(file, decompress = decompress, length = if (readFully) -1 else 0, strategy = strategy))(_.close)
       val r = action(file, lazyIn)
       if (close) lazyIn.clear()
       r
@@ -171,12 +175,12 @@ object RddUtil {
   }
 
   def loadTextLines(
-      path: String,
-      readFully: Boolean = false,
-      sorted: Boolean = false,
-      strategy: HdfsIO.LoadingStrategy = HdfsIO.defaultLoadingStrategy,
-      repartitionFiles: Int = 0,
-      groupFiles: Int = 1
+                     path: String,
+                     readFully: Boolean = false,
+                     sorted: Boolean = false,
+                     strategy: DfsIO.LoadingStrategy = HdfsIO.defaultLoadingStrategy,
+                     repartitionFiles: Int = 0,
+                     groupFiles: Int = 1
   )(implicit accessContext: AccessContext = AccessContext.default): RDD[String] = {
     loadBinary(path, close = false, readFully = readFully, sorted = sorted, strategy = strategy, repartitionFiles = repartitionFiles, groupFiles = groupFiles) { (_, in) =>
       IteratorUtil.cleanup(IOUtil.lines(in), in.close)
@@ -184,12 +188,12 @@ object RddUtil {
   }
 
   def loadTextLinesWithFilenames(
-      path: String,
-      readFully: Boolean = false,
-      sorted: Boolean = false,
-      strategy: HdfsIO.LoadingStrategy = HdfsIO.defaultLoadingStrategy,
-      repartitionFiles: Int = 0,
-      groupFiles: Int = 1
+                                  path: String,
+                                  readFully: Boolean = false,
+                                  sorted: Boolean = false,
+                                  strategy: DfsIO.LoadingStrategy = HdfsIO.defaultLoadingStrategy,
+                                  repartitionFiles: Int = 0,
+                                  groupFiles: Int = 1
   )(implicit accessContext: AccessContext = AccessContext.default): RDD[(String, String)] = {
     loadBinary(path, close = false, readFully = readFully, sorted = sorted, strategy = strategy, repartitionFiles = repartitionFiles, groupFiles = groupFiles) { (file, in) =>
       IteratorUtil.cleanup(IOUtil.lines(in), in.close).map((file, _))
@@ -197,12 +201,12 @@ object RddUtil {
   }
 
   def loadTextFiles(
-      path: String,
-      readFully: Boolean = false,
-      sorted: Boolean = false,
-      strategy: HdfsIO.LoadingStrategy = HdfsIO.defaultLoadingStrategy,
-      repartitionFiles: Int = 0,
-      groupFiles: Int = 1
+                     path: String,
+                     readFully: Boolean = false,
+                     sorted: Boolean = false,
+                     strategy: DfsIO.LoadingStrategy = HdfsIO.defaultLoadingStrategy,
+                     repartitionFiles: Int = 0,
+                     groupFiles: Int = 1
   )(implicit accessContext: AccessContext = AccessContext.default): RDD[(String, CleanupIterator[String])] = {
     loadBinary(path, close = false, readFully = readFully, sorted = sorted, strategy = strategy, repartitionFiles = repartitionFiles, groupFiles = groupFiles) { (file, in) =>
       Some(file, IteratorUtil.cleanup(IOUtil.lines(in), in.close))
@@ -227,7 +231,7 @@ object RddUtil {
             val d = c <= drop
             if (d) drop -= c
             d
-          }.toIterator.map(_._1).map(f => HdfsIO.iterLines(f).chain(items(f, _)))
+          }.toIterator.map(_._1).map(f => DfsIO.iterLines(f).chain(items(f, _)))
         }.chain { items =>
           IteratorUtil.take(IteratorUtil.drop(items, drop), perPartition)
         }
@@ -252,30 +256,30 @@ object RddUtil {
   }
 
   def loadTextPartitionsByLinesWithFilenames(path: String, linesPerPartition: Long = 100000000)(implicit accessContext: AccessContext = AccessContext.default): RDD[(String, CleanupIterator[String])] = {
-    loadPartitions(path)(f => (0 until (HdfsIO.countLines(f).toDouble / linesPerPartition).ceil.toInt).toIterator.map((f, _))) { case (f, (_, p)) =>
-      val in = HdfsIO.open(f)
+    loadPartitions(path)(f => (0 until (DfsIO.countLines(f).toDouble / linesPerPartition).ceil.toInt).toIterator.map((f, _))) { case (f, (_, p)) =>
+      val in = DfsIO.open(f)
       val lines = IteratorUtil.take(IteratorUtil.drop(IOUtil.lines(in), p * linesPerPartition), linesPerPartition)
       Iterator((f, IteratorUtil.cleanup(lines, in.close)))
     }
   }
 
   def loadTextPartitionsByGroups(path: String, groupBy: String => String, groupsPerPartition: Int = 100000)(implicit accessContext: AccessContext = AccessContext.default): RDD[(String, Iterator[String])] = {
-    loadPartitions(path)(f => (0 until (IteratorUtil.groupSortedBy(HdfsIO.iterLines(path))(groupBy).size.toDouble / groupsPerPartition).ceil.toInt).toIterator.map((f, _))) {
+    loadPartitions(path)(f => (0 until (IteratorUtil.groupSortedBy(DfsIO.iterLines(path))(groupBy).size.toDouble / groupsPerPartition).ceil.toInt).toIterator.map((f, _))) {
       case (f, (_, p)) =>
-        val in = HdfsIO.open(f)
+        val in = DfsIO.open(f)
         val lines = IteratorUtil.drop(IteratorUtil.groupSortedBy(IOUtil.lines(in))(groupBy), p * groupsPerPartition).take(groupsPerPartition)
         IteratorUtil.cleanup(lines, in.close)
     }
   }
 
   def loadTextPartitions(path: String, numPartitions: Int = Sparkling.parallelism, estimateCompressionSampleBytes: Long = 100.mb)(implicit accessContext: AccessContext = AccessContext.default): RDD[String] = {
-    val bytes = loadFilesLocality(path).map(HdfsIO.length).fold(0L)(_ + _)
+    val bytes = loadFilesLocality(path).map(DfsIO.length).fold(0L)(_ + _)
     val bytesPerPartition = (bytes.toDouble / numPartitions).toLong
     loadTextPartitionsByBytes(path, bytesPerPartition, compressedSize = true, estimateCompressionSampleBytes)
   }
 
   def loadTextPartitionsGrouped(path: String, groupBy: String => String, numPartitions: Int = Sparkling.parallelism, estimateCompressionSampleBytes: Long = 100.mb)(implicit accessContext: AccessContext = AccessContext.default): RDD[(String, Iterator[String])] = {
-    val bytes = loadFilesLocality(path).map(HdfsIO.length).fold(0L)(_ + _)
+    val bytes = loadFilesLocality(path).map(DfsIO.length).fold(0L)(_ + _)
     val bytesPerPartition = (bytes.toDouble / numPartitions).toLong
     loadPartitionsByBytes(path, bytesPerPartition, compressedSize = true, estimateCompressionSampleBytes) { (in, p, last, uncompressedBytesPerPartition) =>
       if (p > 0) StringUtil.readLine(in) // skip first line
@@ -295,10 +299,10 @@ object RddUtil {
 
   def loadPartitionsByBytes[A: ClassTag](path: String, bytesPerPartition: Long = 1.gb, compressedSize: Boolean = false, estimateCompressionSampleBytes: Long = 100.mb)(load: (CountingInputStream, Int, Boolean, Long) => Iterator[A])(implicit accessContext: AccessContext = AccessContext.default): RDD[A] = {
     loadPartitions(path) { f =>
-      val fileSize = HdfsIO.length(f)
+      val fileSize = DfsIO.length(f)
       val uncompressedSize =
         if (f.toLowerCase.endsWith(GzipExt) && !compressedSize) {
-          val factor = HdfsIO.access(f, decompress = false)(Gzip.estimateCompressionFactor(_, estimateCompressionSampleBytes))
+          val factor = DfsIO.access(f, decompress = false)(Gzip.estimateCompressionFactor(_, estimateCompressionSampleBytes))
           (fileSize * factor).ceil.toLong
         } else fileSize
       val numPartitions = (uncompressedSize.toDouble / bytesPerPartition).ceil.toInt
@@ -306,10 +310,10 @@ object RddUtil {
     } { case (f, (_, (p, last))) =>
       val uncompressedBytesPerPartition =
         if (f.toLowerCase.endsWith(GzipExt) && compressedSize) {
-          val factor = HdfsIO.access(f, decompress = false)(Gzip.estimateCompressionFactor(_, estimateCompressionSampleBytes))
+          val factor = DfsIO.access(f, decompress = false)(Gzip.estimateCompressionFactor(_, estimateCompressionSampleBytes))
           (bytesPerPartition * factor).ceil.toLong
         } else bytesPerPartition
-      val in = HdfsIO.open(f)
+      val in = DfsIO.open(f)
       IOUtil.skip(in, p * uncompressedBytesPerPartition)
       val counting = new CountingInputStream(in)
       IteratorUtil.cleanup(load(counting, p, last, uncompressedBytesPerPartition), counting.close)
@@ -321,14 +325,14 @@ object RddUtil {
       prefix: String => String,
       readFully: Boolean = false,
       sorted: Boolean = false,
-      strategy: HdfsIO.LoadingStrategy = HdfsIO.defaultLoadingStrategy
+      strategy: DfsIO.LoadingStrategy = HdfsIO.defaultLoadingStrategy
   )(implicit accessContext: AccessContext = AccessContext.default): RDD[(String, Iterator[String])] = { groupSorted(loadTextLines(path, readFully = readFully, sorted = sorted, strategy = strategy), prefix) }
 
   def loadTextLinesGroupedAcrossFiles(path: String, groupBy: String => Option[String], groupFiles: Int = 1)(implicit accessContext: AccessContext = AccessContext.default): RDD[(String, Iterator[String])] =
     loadGroupedAcrossFiles(path, (file, in) => IOUtil.lines(in, Some(file)), groupFiles)(groupBy)
 
   def loadGroupedAcrossFiles[D: ClassTag, P](path: String, load: (String, InputStream) => TraversableOnce[D], groupFiles: Int = 1)(groupBy: D => Option[P])(implicit accessContext: AccessContext = AccessContext.default): RDD[(P, Iterator[D])] = {
-    val files = HdfsIO.files(path).toSeq.sorted.grouped(groupFiles).toSeq
+    val files = DfsIO.files(path).toSeq.sorted.grouped(groupFiles).toSeq
     val filesBroadcast = sc.broadcast(files.map(_.head))
 
     RddUtil.parallelize(files).flatMap { group =>
@@ -337,12 +341,12 @@ object RddUtil {
       if (fileIdx < 0) Iterator.empty
       else {
         val fileRecords = CleanupIterator.flatten(group.toIterator.map { file =>
-          val in = HdfsIO.open(file, decompress = false)
+          val in = DfsIO.open(file, decompress = false)
           IteratorUtil.cleanup(load(file, in).toIterator, in.close)
         })
 
         val overRecords = CleanupIterator.flatten(files.drop(fileIdx + 1).toIterator.map { file =>
-          val in = HdfsIO.open(file, decompress = false)
+          val in = DfsIO.open(file, decompress = false)
           IteratorUtil.cleanup(load(file, in).toIterator, in.close)
         }).chain { iter =>
           IteratorUtil.lazyIter {
@@ -584,8 +588,8 @@ object RddUtil {
 
   def saveGroupedAsNamedFiles(rdd: => RDD[(String, Iterator[InputStream])], path: String, compress: Boolean = true, skipIfExists: Boolean = false)(implicit accessContext: AccessContext = AccessContext.default): Long = {
     val completeFlagFile = path + "/" + CompleteFlagFile
-    if (skipIfExists && HdfsIO.exists(completeFlagFile)) return 0L
-    HdfsIO.ensureOutDir(path)
+    if (skipIfExists && DfsIO.exists(completeFlagFile)) return 0L
+    DfsIO.ensureOutDir(path)
     val processed = rdd.mapPartitionsWithIndex { case (idx, records) =>
       if (records.hasNext) {
         Common.timeoutWithReporter(saveRecordTimeoutMillis) { reporter =>
@@ -593,7 +597,7 @@ object RddUtil {
           for ((filename, in) <- records) {
             reporter.alive("Writing [" + filename + "]")
             val outPath = new Path(path, filename).toString
-            val out = HdfsIO.out(outPath, overwrite = true, compress = false)
+            val out = DfsIO.out(outPath, overwrite = true, compress = false)
             try {
               for (s <- in) {
                 val compressed = if (compress && filename.toLowerCase.endsWith(GzipExt)) new GZIPOutputStream(new NonClosingOutputStream(out)) else new NonClosingOutputStream(out)
@@ -608,7 +612,7 @@ object RddUtil {
         }
       } else Iterator(0L)
     }.fold(0L)(_ + _)
-    HdfsIO.touch(completeFlagFile)
+    DfsIO.touch(completeFlagFile)
     processed
   }
 
@@ -623,8 +627,8 @@ object RddUtil {
     if (sorted) return saveGroupedAsNamedFiles(groupSortedBy(rdd)(_._1).map { case (f, r) => (f, r.map(_._2)) }, path, skipIfExists)
 
     val completeFlagFile = path + "/" + CompleteFlagFile
-    if (skipIfExists && HdfsIO.exists(completeFlagFile)) return 0L
-    HdfsIO.ensureOutDir(path)
+    if (skipIfExists && DfsIO.exists(completeFlagFile)) return 0L
+    DfsIO.ensureOutDir(path)
     val processed = rdd.mapPartitionsWithIndex { case (idx, records) =>
       if (records.hasNext) {
         Common.timeoutWithReporter(saveRecordTimeoutMillis) { reporter =>
@@ -638,7 +642,7 @@ object RddUtil {
             }
             reporter.alive("Writing [" + filename + "]")
             val outPath = new Path(path, filename).toString
-            val out = streams.getOrElseUpdate(filename, HdfsIO.out(outPath, overwrite = true, compress = false))
+            val out = streams.getOrElseUpdate(filename, DfsIO.out(outPath, overwrite = true, compress = false))
             val compressed = if (compress && filename.toLowerCase.endsWith(GzipExt)) new GZIPOutputStream(new NonClosingOutputStream(out)) else new NonClosingOutputStream(out)
             try {
               IOUtil.copy(in, compressed)
@@ -650,14 +654,14 @@ object RddUtil {
         }
       } else Iterator(0L)
     }.fold(0L)(_ + _)
-    HdfsIO.touch(completeFlagFile)
+    DfsIO.touch(completeFlagFile)
     processed
   }
 
   def saveGroupedAsNamedTextFile(rdd: => RDD[(String, Iterator[String])], path: String, skipIfExists: Boolean = false)(implicit accessContext: AccessContext = AccessContext.default): Long = {
     val completeFlagFile = path + "/" + CompleteFlagFile
-    if (skipIfExists && HdfsIO.exists(completeFlagFile)) return 0L
-    HdfsIO.ensureOutDir(path)
+    if (skipIfExists && DfsIO.exists(completeFlagFile)) return 0L
+    DfsIO.ensureOutDir(path)
     val processed = rdd.mapPartitionsWithIndex { case (idx, records) =>
       if (records.hasNext) {
         Common.timeoutWithReporter(saveRecordTimeoutMillis) { reporter =>
@@ -665,7 +669,7 @@ object RddUtil {
           for ((filename, values) <- records) {
             if (values.hasNext) {
               val outPath = new Path(path, filename).toString
-              val out = IOUtil.print(HdfsIO.out(outPath, overwrite = true))
+              val out = IOUtil.print(DfsIO.out(outPath, overwrite = true))
               try {
                 for (value <- values) {
                   reporter.alive("Writing [" + value + "]")
@@ -679,7 +683,7 @@ object RddUtil {
         }
       } else Iterator(0L)
     }.fold(0L)(_ + _)
-    HdfsIO.touch(completeFlagFile)
+    DfsIO.touch(completeFlagFile)
     processed
   }
 
@@ -694,8 +698,8 @@ object RddUtil {
     if (sorted && !repartition) return saveGroupedAsNamedTextFile(groupSortedBy(rdd)(_._1).map { case (f, r) => (f, r.map(_._2)) }, path, skipIfExists)
 
     val completeFlagFile = path + "/" + CompleteFlagFile
-    if (skipIfExists && HdfsIO.exists(completeFlagFile)) return 0L
-    HdfsIO.ensureOutDir(path)
+    if (skipIfExists && DfsIO.exists(completeFlagFile)) return 0L
+    DfsIO.ensureOutDir(path)
     val repartitioned = if (repartition) rdd.partitionBy(new HashPartitioner(partitions)) else rdd
     val processed = repartitioned.mapPartitionsWithIndex { case (idx, records) =>
       if (records.hasNext) {
@@ -712,7 +716,7 @@ object RddUtil {
                 filePrefix + "-" + StringUtil.padNum(idx, 5) + fileExt
               }
             val outPath = new Path(path, filename).toString
-            val out = streams.getOrElseUpdate(filename, IOUtil.print(HdfsIO.out(outPath, overwrite = true)))
+            val out = streams.getOrElseUpdate(filename, IOUtil.print(DfsIO.out(outPath, overwrite = true)))
             out.println(value)
             processed += 1
           }
@@ -721,7 +725,7 @@ object RddUtil {
         }
       } else Iterator(0L)
     }.fold(0L)(_ + _)
-    HdfsIO.touch(completeFlagFile)
+    DfsIO.touch(completeFlagFile)
     processed
   }
 
@@ -736,17 +740,17 @@ object RddUtil {
       action: (Iterator[A], OutputStream, Common.ProcessReporter) => Long
   )(implicit accessContext: AccessContext = AccessContext.default): Long = {
     val completeFlagFile = path + "/" + CompleteFlagFile
-    if (skipIfExists && HdfsIO.exists(completeFlagFile)) return 0L
-    HdfsIO.ensureOutDir(path, ensureNew = !(skipIfExists && checkPerFile))
+    if (skipIfExists && DfsIO.exists(completeFlagFile)) return 0L
+    DfsIO.ensureOutDir(path, ensureNew = !(skipIfExists && checkPerFile))
     val processed = {
       if (rdd.getNumPartitions == 0) 0L
       else rdd.mapPartitions { records =>
         val outPath = partitionOutPath(path)
-        if (skipIfExists && HdfsIO.exists(outPath)) Iterator(0L)
+        if (skipIfExists && DfsIO.exists(outPath)) Iterator(0L)
         else {
           if (skipEmpty && !records.hasNext) Iterator(0L)
           else {
-            val out = HdfsIO.out(outPath, compress = compress, overwrite = true)
+            val out = DfsIO.out(outPath, compress = compress, overwrite = true)
             val processed = if (records.hasNext) Common.timeoutWithReporter(saveRecordTimeoutMillis)(action(records, out, _)) else 0L
             out.close()
             Iterator(processed)
@@ -754,7 +758,7 @@ object RddUtil {
         }
       }.fold(0L)(_ + _)
     }
-    HdfsIO.touch(completeFlagFile)
+    DfsIO.touch(completeFlagFile)
     processed
   }
 
@@ -797,8 +801,8 @@ object RddUtil {
       groupByKey: Boolean = false
   )(implicit accessContext: AccessContext = AccessContext.default): Long = {
     val completeFlagFile = path + "/" + CompleteFlagFile
-    if (skipIfExists && HdfsIO.exists(completeFlagFile)) return 0L
-    HdfsIO.ensureOutDir(path, ensureNew = !(skipIfExists && checkPerFile))
+    if (skipIfExists && DfsIO.exists(completeFlagFile)) return 0L
+    DfsIO.ensureOutDir(path, ensureNew = !(skipIfExists && checkPerFile))
     val fileName = new Path(path).getName
     val split = fileName.split("\\.", 2)
     val (filePrefix, fileExt) = (split.head, split.drop(1).headOption.map("." + _).getOrElse(TxtExt))
@@ -806,13 +810,13 @@ object RddUtil {
       val outPath = new Path(path, Sparkling.getTaskOutFile(idx => filePrefix + "-" + StringUtil.padNum(idx, 5) + fileExt)).toString
       val compressed = outPath.toLowerCase.endsWith(GzipExt)
       val idxPath = outPath + IdxExt
-      if (skipIfExists && HdfsIO.exists(outPath)) Iterator(0L)
+      if (skipIfExists && DfsIO.exists(outPath)) Iterator(0L)
       else {
         if (skipEmpty && !records.hasNext) Iterator(0L)
         else {
           val processed =
             if (records.hasNext) {
-              val idxOut = IOUtil.print(HdfsIO.out(idxPath, compress = false, overwrite = true), closing = true)
+              val idxOut = IOUtil.print(DfsIO.out(idxPath, compress = false, overwrite = true), closing = true)
               val grouped =
                 if (groupByKey) {
                   if (maxLines > 0) { IteratorUtil.groupSorted(records, key).flatMap { case (p, r) => IteratorUtil.groupedN(r, maxLines).map((p, _)) } }
@@ -844,7 +848,7 @@ object RddUtil {
                 }.sum
               }
               tmpOut.close()
-              HdfsIO.copyFromLocal(tmpOutPath, outPath, move = true, overwrite = true)
+              DfsIO.copyFromLocal(tmpOutPath, outPath, move = true, overwrite = true)
               idxOut.close()
               processed
             } else 0L
@@ -852,14 +856,14 @@ object RddUtil {
         }
       }
     }.fold(0L)(_ + _)
-    HdfsIO.touch(completeFlagFile)
+    DfsIO.touch(completeFlagFile)
     processed
   }
 
   def saveSplits[A](rdd: => RDD[Iterator[A]], path: String, skipIfExists: Boolean = false, checkPerFile: Boolean = false)(action: (Iterator[A], OutputStream, Common.ProcessReporter) => Long)(implicit accessContext: AccessContext = AccessContext.default): Long = {
     val completeFlagFile = path + "/" + CompleteFlagFile
-    if (skipIfExists && HdfsIO.exists(completeFlagFile)) return 0L
-    HdfsIO.ensureOutDir(path, ensureNew = !(skipIfExists && checkPerFile))
+    if (skipIfExists && DfsIO.exists(completeFlagFile)) return 0L
+    DfsIO.ensureOutDir(path, ensureNew = !(skipIfExists && checkPerFile))
     val pathFileName = new Path(path).getName
     val split = pathFileName.split("\\.", 2)
     val (pathFilePrefix, pathFileExt) = (split.head, split.drop(1).headOption.map("." + _).getOrElse(TxtExt))
@@ -869,20 +873,20 @@ object RddUtil {
         (split.head, split.drop(1).headOption.map("." + _).getOrElse(TxtExt))
       }
       val completeSplitFlagFile = path + "/_" + filePrefix + fileExt.replace('.', '_') + CompleteFlagFile
-      if (skipIfExists && HdfsIO.exists(completeSplitFlagFile)) Iterator(0L)
+      if (skipIfExists && DfsIO.exists(completeSplitFlagFile)) Iterator(0L)
       else {
         val processed = splits.zipWithIndex.map { case (records, i) =>
           val outPath = new Path(path, filePrefix + "-" + StringUtil.padNum(i, 5) + fileExt).toString
-          val out = HdfsIO.out(outPath, overwrite = true)
+          val out = DfsIO.out(outPath, overwrite = true)
           val processed = if (records.hasNext) Common.timeoutWithReporter(saveRecordTimeoutMillis)(action(records, out, _)) else 0L
           out.close()
           processed
         }.sum
-        HdfsIO.touch(completeSplitFlagFile)
+        DfsIO.touch(completeSplitFlagFile)
         Iterator(processed)
       }
     }.fold(0L)(_ + _)
-    HdfsIO.touch(completeFlagFile)
+    DfsIO.touch(completeFlagFile)
     processed
   }
 

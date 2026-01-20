@@ -6,10 +6,9 @@ import org.apache.spark.rdd.RDD
 import org.archive.webservices.sparkling._
 import org.archive.webservices.sparkling.compression.Gzip
 import org.archive.webservices.sparkling.indexed.{HdfsIndexBackedMap, PrefixIndexLoader, SortedPrefixSeq}
-import org.archive.webservices.sparkling.io.{HdfsBackedMap, HdfsIO, IOUtil}
+import org.archive.webservices.sparkling.io.{DfsIO, HdfsBackedMap, IOUtil}
 import org.archive.webservices.sparkling.util._
 
-import java.io.InputStream
 import scala.math.pow
 import scala.util.Random
 
@@ -89,9 +88,9 @@ object CdxServerIndex {
   }
 
   def lookup[A](indexDirPath: String, lookupSorted: RDD[A])(surt: A => String)(implicit accessContext: AccessContext = AccessContext.default): ManagedVal[RDD[(String, A, Iterator[CdxRecord])]] = {
-    val blockSize = HdfsIO.fs.getDefaultBlockSize(new Path(indexDirPath))
+    val blockSize = DfsIO.getBlockSize(indexDirPath)
     lazy val filesBroadcast = {
-      val files = HdfsIO.files(new Path(indexDirPath, "part-*.gz").toString).map(_.split('/').last).toSeq.sorted
+      val files = DfsIO.files(new Path(indexDirPath, "part-*.gz").toString).map(_.split('/').last).toSeq.sorted
       sc.broadcast(files)
     }
     lazy val cdxIndexBroadcast = {
@@ -127,7 +126,7 @@ object CdxServerIndex {
                       groupedCdx = Some {
                         val fileOffsets = Iterator((filename, offset)) ++ files.dropWhile(_ <= filename).map((_, 0L))
                         CleanupIterator.flatten(fileOffsets.map { case (f, o) =>
-                          val in = HdfsIO.open(new Path(indexDirPath, f).toString, offset = o)
+                          val in = DfsIO.open(new Path(indexDirPath, f).toString, offset = o)
                           CleanupIterator(IOUtil.lines(in), in.close)
                         }).chain(IteratorUtil.groupSortedBy(_)(StringUtil.prefixBySeparator(_, " ")))
                       }
@@ -172,7 +171,7 @@ object CdxServerIndex {
   def primitiveHdfsBackedStrMap(indexDirPath: String)(implicit accessContext: AccessContext = AccessContext.default): HdfsIndexBackedMap = {
     new HdfsIndexBackedMap(new Path(indexDirPath, "part-*.gz").toString, StringUtil.prefixBySeparator(_, " "), { case (file, key) =>
       val indexFile = file.stripSuffix(".gz") + "-idx"
-      HdfsIO.iterLines(indexFile).iter { iter =>
+      DfsIO.iterLines(indexFile).iter { iter =>
         val smallerKeyOffsets = iter.map { idxLine =>
           val split = RegexUtil.split(idxLine, "\t") // surt ts, filename, offset, length
           (split.head.split(' ').head, split(2).toLong)
@@ -234,9 +233,9 @@ object CdxServerIndex {
         val split = RegexUtil.split(idxLine, "\t")
         val (filename, offset, length) = (split(1) + ".gz", split(2).toLong, split(3).toLong) // filename, offset, length
         val path = indexDirPath + "/" + filename
-        val compressionFactor = HdfsIO.access(path, offset = offset, length = length, decompress = false)(Gzip.estimateCompressionFactor(_, 1.mb))
+        val compressionFactor = DfsIO.access(path, offset = offset, length = length, decompress = false)(Gzip.estimateCompressionFactor(_, 1.mb))
         val size = length * compressionFactor
-        val in = IOUtil.supportMark(HdfsIO.open(path, offset = offset, length = length))
+        val in = IOUtil.supportMark(DfsIO.open(path, offset = offset, length = length))
         val relevantCdxLines = if (fromWhile.isDefined) {
           val (from, whileCond) = fromWhile.get
           IOUtil.lines(in).dropWhile(_ < from).takeWhile(l => whileCond(StringUtil.prefixBySeparator(l, " ")))
@@ -293,7 +292,7 @@ object CdxServerIndex {
         val beginning = files.headOption.contains(file) && p == 0
         val filesIter = files.toIterator.dropWhile(_ < file).buffered
         val f = filesIter.next
-        val (offset, startPrefix, endPrefix) = HdfsIO.access(f) { in =>
+        val (offset, startPrefix, endPrefix) = DfsIO.access(f) { in =>
           val lines = if (fromWhile.isDefined) {
             val (from, _) = fromWhile.get
             val relevant = IteratorUtil.dropButLast(IOUtil.lines(in).buffered)(StringUtil.prefixBySeparator(_, " ") < from)
@@ -303,14 +302,14 @@ object CdxServerIndex {
           val startPrefix = surtPrefix(split.head.split(' ').head)
           val offset = split(2).toLong
           val endPrefix = IteratorUtil.drop(lines, linesPerPartition).buffered.headOption.orElse {
-            filesIter.headOption.flatMap(HdfsIO.lines(_, n = 1).headOption)
+            filesIter.headOption.flatMap(DfsIO.lines(_, n = 1).headOption)
           }.map(StringUtil.prefixBySeparator(_, " ")).map(surtPrefix)
           (offset, startPrefix, endPrefix)
         }
         if (!beginning && endPrefix.contains(startPrefix)) Iterator.empty
         else {
           val lines = CleanupIterator.flatten(files.toIterator.dropWhile(_ < file).zipWithIndex.map { case (f, i) =>
-            val in = HdfsIO.open(f.stripSuffix("-idx") + ".gz", offset = if (i == 0) offset else 0)
+            val in = DfsIO.open(f.stripSuffix("-idx") + ".gz", offset = if (i == 0) offset else 0)
             IteratorUtil.cleanup(IOUtil.lines(in), in.close)
           })
           val groups = lines.chain { l =>

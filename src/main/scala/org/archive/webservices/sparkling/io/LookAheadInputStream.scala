@@ -30,17 +30,17 @@ class LookAheadInputStream(in: InputStream) extends InputStream {
   override def read(b: Array[Byte]): Int = ifHead({ head =>
     b(0) = head.toByte
     in.read(b, 1, b.length - 1) + 1
-  }, in.read(b), eof = -1, detectEof = true)
+  }, in.read(b), reset = b.length > 0, eof = -1, detectEof = true)
 
   override def read(b: Array[Byte], off: Int, len: Int): Int = ifHead({ head =>
     if (len == 0) 0 else {
       b(off) = head.toByte
       in.read(b, off + 1, len - 1) + 1
     }
-  }, in.read(b, off, len), eof = -1, detectEof = true)
+  }, in.read(b, off, len), reset = len > 0, eof = -1, detectEof = true)
 
   override def skip(n: Long): Long = ifHead({ _ =>
-    if (n <= 1) n else in.skip(n - 1)
+    if (n <= 1) n else in.skip(n - 1) + 1
   }, in.skip(n), reset = n > 0, eof = 0, detectEof = false)
 
   override def available(): Int = ifHead({ _ =>
@@ -51,5 +51,6 @@ class LookAheadInputStream(in: InputStream) extends InputStream {
     _head = -1
     in.close()
   }
+
   override def markSupported(): Boolean = false
 }

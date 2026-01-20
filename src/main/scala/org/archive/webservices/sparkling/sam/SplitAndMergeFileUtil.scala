@@ -2,7 +2,7 @@ package org.archive.webservices.sparkling.sam
 
 import org.apache.hadoop.fs.Path
 import org.archive.webservices.sparkling.Sparkling
-import org.archive.webservices.sparkling.io.HdfsIO
+import org.archive.webservices.sparkling.io.DfsIO
 import org.archive.webservices.sparkling.util.{RddUtil, StringUtil}
 
 object SplitAndMergeFileUtil {
@@ -30,7 +30,7 @@ object SplitAndMergeFileUtil {
     }.reduce(_ + _)
   }
 
-  def merge(path: String, outDir: String, outPath: (String, String) => String = mergePath, mergeFiles: (Seq[String], String) => Unit = HdfsIO.concat(_, _)): Long = {
+  def merge(path: String, outDir: String, outPath: (String, String) => String = mergePath, mergeFiles: (Seq[String], String) => Unit = DfsIO.concat(_, _)): Long = {
     RddUtil.loadFilesLocality(path).map(file => (outPath(file, outDir), file)).groupByKey(Sparkling.parallelism).map { case (outFile, splits) =>
       val parts = splits.toList.sorted
       mergeFiles(parts, outFile)

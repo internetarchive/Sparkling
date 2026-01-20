@@ -7,7 +7,7 @@ import org.archive.webservices.sparkling._
 import org.archive.webservices.sparkling.budget.BudgetRddManager
 import org.archive.webservices.sparkling.cdx.CdxRecord
 import org.archive.webservices.sparkling.compression.{Gzip, GzipBytes, Zstd}
-import org.archive.webservices.sparkling.io.{CleanupInputStream, HdfsIO, IOUtil}
+import org.archive.webservices.sparkling.io.{CleanupInputStream, DfsIO, IOUtil}
 import org.archive.webservices.sparkling.logging.{Log, LogContext}
 import org.archive.webservices.sparkling.util._
 
@@ -29,7 +29,7 @@ object WarcProcessor {
   def repartitionAndExtractWarcsByCdx(cdx: RDD[CdxRecord], warcHeader: WarcFileMeta, destPath: String, maxFileSize: Long, generateCdx: Boolean = true, gzipped: Boolean = true)(
       request: (String, Long, Long) => ManagedVal[InputStream]
   ): Long = {
-    HdfsIO.ensureOutDir(destPath, ensureNew = false)
+    DfsIO.ensureOutDir(destPath, ensureNew = false)
 
     val bytesReservedForWarcHeader = {
       val headerBytes = WarcHeaders.warcFile(warcHeader, StringUtil.stripSuffixes(new Path(destPath).getName, GzipExt, WarcExt, ArcExt) + "-00000-WARC" + WarcExt + GzipExt)
@@ -63,7 +63,7 @@ object WarcProcessor {
   def extractWarcsByCdx(cdx: RDD[CdxRecord], warcHeader: WarcFileMeta, destPath: String, generateCdx: Boolean = true, gzipped: Boolean = true, checkPath: Boolean = true)(
       request: (String, Long, Long) => ManagedVal[InputStream]
   ): Long = {
-    HdfsIO.ensureOutDir(destPath, ensureNew = checkPath)
+    DfsIO.ensureOutDir(destPath, ensureNew = checkPath)
     val filePrefix = StringUtil.stripSuffixes(new Path(destPath).getName, GzipExt, WarcExt, ArcExt)
     initPartitions(cdx).mapPartitionsWithIndex { (idx, records) =>
       val processed = extractPartitionWarcsByCdx(records, warcHeader, destPath, filePrefix + "-" + StringUtil.padNum(idx, 5), generateCdx, gzipped)(request)
@@ -74,7 +74,7 @@ object WarcProcessor {
   def extractPartitionWarcsByCdx(partition: TraversableOnce[CdxRecord], warcHeader: WarcFileMeta, destPath: String, destFilePrefix: String, generateCdx: Boolean = true, gzipped: Boolean = true)(
       request: (String, Long, Long) => ManagedVal[InputStream]
   ): Long = {
-    HdfsIO.ensureOutDir(destPath, ensureNew = false)
+    DfsIO.ensureOutDir(destPath, ensureNew = false)
 
     val warcName = destFilePrefix + "-WARC"
     val arcName = destFilePrefix + "-ARC"
@@ -91,14 +91,14 @@ object WarcProcessor {
     val warcErrPath = new Path(destPath, warcName + WarcExt + CdxExt + ErrLogExt).toString
     val arcErrPath = new Path(destPath, arcName + ArcExt + CdxExt + ErrLogExt).toString
 
-    val warcComplete = HdfsIO.exists(warcPath) && (HdfsIO.exists(warcCdxPath) || !generateCdx)
-    val arcComplete = HdfsIO.exists(arcPath) && (HdfsIO.exists(arcCdxPath) || !generateCdx)
+    val warcComplete = DfsIO.exists(warcPath) && (DfsIO.exists(warcCdxPath) || !generateCdx)
+    val arcComplete = DfsIO.exists(arcPath) && (DfsIO.exists(arcCdxPath) || !generateCdx)
 
     if (warcComplete && arcComplete) 0L
     else {
       var warcPosition = 0L
       val warcOut = Common.lazyValWithCleanup({
-        val out = HdfsIO.out(warcPath, compress = false, overwrite = true)
+        val out = DfsIO.out(warcPath, compress = false, overwrite = true)
         val headerBytes = WarcHeaders.warcFile(warcHeader, warcFile)
         val compressedHeader = if (gzipped) GzipBytes(headerBytes) else headerBytes
         out.write(compressedHeader)
@@ -108,7 +108,7 @@ object WarcProcessor {
 
       var arcPosition = 0L
       val arcOut = Common.lazyValWithCleanup({
-        val out = HdfsIO.out(arcPath, compress = false, overwrite = true)
+        val out = DfsIO.out(arcPath, compress = false, overwrite = true)
         val headerBytes = WarcHeaders.arcFile(warcHeader, arcFile)
         val compressedHeader = if (gzipped) GzipBytes(headerBytes) else headerBytes
         out.write(compressedHeader)
@@ -116,11 +116,11 @@ object WarcProcessor {
         out
       })(_.close)
 
-      val warcCdxOut = Common.lazyValWithCleanup(IOUtil.print(HdfsIO.out(warcCdxPath, overwrite = true)))(_.close)
-      val arcCdxOut = Common.lazyValWithCleanup(IOUtil.print(HdfsIO.out(arcCdxPath, overwrite = true)))(_.close)
+      val warcCdxOut = Common.lazyValWithCleanup(IOUtil.print(DfsIO.out(warcCdxPath, overwrite = true)))(_.close)
+      val arcCdxOut = Common.lazyValWithCleanup(IOUtil.print(DfsIO.out(arcCdxPath, overwrite = true)))(_.close)
 
-      val warcErrOut = Common.lazyValWithCleanup(IOUtil.print(HdfsIO.out(warcErrPath, overwrite = true)))(_.close)
-      val arcErrOut = Common.lazyValWithCleanup(IOUtil.print(HdfsIO.out(arcErrPath, overwrite = true)))(_.close)
+      val warcErrOut = Common.lazyValWithCleanup(IOUtil.print(DfsIO.out(warcErrPath, overwrite = true)))(_.close)
+      val arcErrOut = Common.lazyValWithCleanup(IOUtil.print(DfsIO.out(arcErrPath, overwrite = true)))(_.close)
 
       var isArc = false
       val processed = partition.map { record =>
