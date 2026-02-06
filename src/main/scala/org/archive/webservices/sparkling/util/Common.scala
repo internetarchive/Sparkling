@@ -53,6 +53,18 @@ object Common {
     }
   }
 
+  def retry[R](action: => R, times: Int, sleepMillis: Int): R = {
+    for (i <- 1 to times) {
+      try {
+        return action
+      } catch {
+        case _: Exception if i < times =>
+          Thread.sleep(sleepMillis)
+      }
+    }
+    unreachable
+  }
+
   def retry[R](times: Int = 30, sleepMillis: Int = 1000, log: (Int, Exception) => String)(run: Int => R)(implicit context: LogContext = CommonLogContext): R = {
     retryObj(Unit)(times, sleepMillis, log = (_, i, e) => log(i, e))((o, i) => run(i))
   }

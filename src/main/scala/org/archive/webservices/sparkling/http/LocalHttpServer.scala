@@ -10,12 +10,6 @@ import java.nio.charset.Charset
 import scala.util.Try
 
 object LocalHttpServer {
-  val ContentSecurityHeader: String = "Content-Security-Policy"
-  val AccessControlAllowOriginHeader: String = "Access-Control-Allow-Origin"
-  val AccessControlAllowCredentialsHeader: String = "Access-Control-Allow-Credentials"
-
-  val FilterWarcHeaders: Set[String] = Set(ContentSecurityHeader, AccessControlAllowOriginHeader).map(_.toLowerCase)
-
   def findFreePort(): Int = {
     val socket = new java.net.ServerSocket(0)
     val port = socket.getLocalPort
@@ -45,39 +39,6 @@ class LocalHttpServer(val port: Int) extends NanoHTTPD(port) {
 
   def setServe(method: NanoHTTPD.IHTTPSession => Response): Unit = serveMethod = method
 
-  def setServeWarcBody(warc: String => Option[WarcRecord]): Unit = setServeWarcBody(warc, close = false)
-
-  def setServeWarcBody(warc: String => Option[WarcRecord], close: Boolean): Unit = {
-    serveMethod = { s =>
-      val q = Option(s.getQueryParameterString).map(_.trim).filter(_.nonEmpty).map("?" + _).getOrElse("")
-      val url = s.getUri.stripPrefix("/") + q
-      Try(warc(url)).toOption.flatten match {
-        case Some(warc) =>
-          warc.http match {
-            case Some(http) =>
-              Option(Response.Status.lookup(http.status)).map { status =>
-                val mimeType = http.headerMap.get("content-type").orNull
-                val data = new CleanupInputStream(http.body, () => {
-                  if (close) warc.in.close() else warc.close()
-                })
-                val response = new LocalHttpServerResponse(status, mimeType, data, -1) //new CatchingInputStream(data), -1) // -1 == chunked
-
-                for (location <- http.headerMap.get("location")) response.addHeader("Location", location)
-
-                response.addHeader(LocalHttpServer.AccessControlAllowOriginHeader, "*")
-                response.addHeader("Cache-Control", "no-store, no-cache, must-revalidate")
-                response.addHeader("Pragma", "no-cache")
-                response.addHeader("Expires", "0")
-
-                response
-              }.getOrElse(notFound)
-            case None => notFound
-          }
-        case None => notFound
-      }
-    }
-  }
-
   def setServeWarc(warc: String => Option[WarcRecord]): Unit = setServeWarc(warc, close = false)
 
   def setServeWarc(warc: String => Option[WarcRecord], close: Boolean): Unit = {
@@ -89,17 +50,15 @@ class LocalHttpServer(val port: Int) extends NanoHTTPD(port) {
           warc.http match {
             case Some(http) =>
               Option(Response.Status.lookup(http.status)).map { status =>
-                val mimeType = http.headerMap.get("content-type").orNull
-                val contentLength = http.contentLength.getOrElse(-1L)
-                val data = new CleanupInputStream(http.payload, () => {
+                val mimeType = http.contentType.orNull
+                val data = new CleanupInputStream(http.body, () => {
                   if (close) warc.in.close() else warc.close()
                 })
-                val response = new LocalHttpServerResponse(status, mimeType, new CatchingInputStream(data), contentLength)
-                for {
-                  (key, value) <- http.headers if key != null && value != null && !LocalHttpServer.FilterWarcHeaders.contains(key)
-                } response.addHeader(key, value)
+                val response = new LocalHttpServerResponse(status, mimeType, data, -1) //new CatchingInputStream(data), -1) // -1 == chunked
 
-                response.addHeader(LocalHttpServer.AccessControlAllowCredentialsHeader, "true")
+                for (location <- http.headerMap.get("location")) response.addHeader("Location", location)
+
+                response.addHeader("Access-Control-Allow-Origin", "*")
                 response.addHeader("Cache-Control", "no-store, no-cache, must-revalidate")
                 response.addHeader("Pragma", "no-cache")
                 response.addHeader("Expires", "0")

@@ -4,7 +4,7 @@ import java.io.InputStream
 
 import org.archive.webservices.sparkling.util.Common
 
-class CleanupInputStream(in: InputStream, cleanup: () => Unit) extends LookAheadInputStream(in) {
+class CleanupInputStream(in: InputStream, cleanup: () => Unit, closeSuper: Boolean = true) extends LookAheadInputStream(in) {
   private var closed = false
 
   def closeIfEof[R](read: => R, eof: R): R = {
@@ -21,7 +21,7 @@ class CleanupInputStream(in: InputStream, cleanup: () => Unit) extends LookAhead
   override def available(): Int = closeIfEof(super.available(), 0)
   override def close(): Unit = if (!closed) {
     closed = true
-    Common.cleanup(super.close())(cleanup)
+    if (closeSuper) Common.cleanup(super.close())(cleanup) else cleanup()
   }
   override def markSupported(): Boolean = false
 }

@@ -1,7 +1,5 @@
 package org.archive.webservices.sparkling.util
 
-import org.archive.webservices.sparkling.indexed.{BasicSortedPrefixSeq, SortedPrefixSeq}
-
 import scala.util.Try
 
 class ManagedVal[A] private (create: => A, cleanup: Either[Exception, A] => Unit = (_: Either[Exception, A]) => {}, val lazyEval: Boolean = true) {

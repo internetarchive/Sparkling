@@ -19,7 +19,8 @@ class HttpMessage(val statusLine: String, val headers: Seq[(String, String)], va
 
   def contentEncoding: Option[String] = headerMap.get("content-encoding").map(_.toLowerCase)
   def contentLength: Option[Long] = headerMap.get("content-length").flatMap(l => Try { l.trim.toLong }.toOption)
-  def mime: Option[String] = headerMap.get("content-type").map(StringUtil.prefixBySeparator(_, ";").trim.toLowerCase)
+  def contentType: Option[String] = headerMap.get("content-type")
+  def mime: Option[String] = contentType.map(StringUtil.prefixBySeparator(_, ";").trim.toLowerCase)
   def charset: Option[String] = headerMap.get("content-type").flatMap(charsetFromContentTypeHeader)
   def redirectLocation: Option[String] = headerMap.get("location").map(_.trim)
   def isChunked: Boolean = headerMap.get("transfer-encoding").map(_.toLowerCase).contains("chunked")
