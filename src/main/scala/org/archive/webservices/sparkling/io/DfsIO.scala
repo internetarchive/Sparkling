@@ -91,7 +91,7 @@ trait DfsIO extends Serializable {
     var tmpPath: String = null
     while ({
       tmpPath = IOUtil.concatPaths(path, prefix + rnd)
-      exists(tmpPath) || mkdirs(tmpPath)
+      exists(tmpPath) || !mkdirs(tmpPath)
     }) rnd = System.currentTimeMillis + "-" + Random.nextInt.abs
     if (deleteOnExit) this.deleteOnExit(tmpPath)
     tmpPath
