@@ -5,7 +5,7 @@ import org.archive.webservices.sparkling.Sparkling.GzipExt
 import org.archive.webservices.sparkling.util.Common
 
 import java.io.{FileSystem => _, _}
-import java.util.zip.GZIPOutputStream
+import java.util.zip.{GZIPInputStream, GZIPOutputStream}
 
 object S3DfsIO {
   def forBucket(bucket: String)(s3: => S3Client): S3DfsIO = new S3DfsIO(s3, bucket)
@@ -41,7 +41,10 @@ class S3DfsIO private (s3: => S3Client, bucket: String) extends DfsIO {
       retries: Int = 10,
       sleepMillis: Int = 1000,
       strategy: DfsIO.LoadingStrategy = HdfsIO.defaultLoadingStrategy
-  ): InputStream = client.open(bucket, path, offset, length, close = false)(identity)
+  ): InputStream = {
+    val raw = client.open(bucket, path, offset, length, close = false)(identity)
+    if (decompress && path.toLowerCase.endsWith(GzipExt)) new GZIPInputStream(raw) else raw
+  }
 
   def copyFromLocal(src: String, dst: String, move: Boolean = false, overwrite: Boolean = false, replication: Short = 0): Unit = try {
     if (exists(dst)) {
@@ -94,7 +97,7 @@ class S3DfsIO private (s3: => S3Client, bucket: String) extends DfsIO {
     val tmpFile = IOUtil.tmpFile
     if (exists(path)) {
       if (append) client.download(bucket, path, tmpFile)
-      else throw new IOException("file exists: " + path)
+      else if (!overwrite) throw new IOException("file exists: " + path)
     }
     val out = IOUtil.fileOut(tmpFile, append = append)
     val compressed = if (compress && path.toLowerCase.endsWith(GzipExt)) new GZIPOutputStream(out) else out

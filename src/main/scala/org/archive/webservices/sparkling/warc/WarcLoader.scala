@@ -4,6 +4,7 @@ import java.io._
 import com.google.common.io.CountingInputStream
 import org.apache.hadoop.fs.Path
 import org.apache.spark.rdd.RDD
+import org.archive.webservices.sparkling.AccessContext
 import org.archive.webservices.sparkling.cdx.CdxRecord
 import org.archive.webservices.sparkling.compression.Gzip
 import org.archive.webservices.sparkling.io.{ByteArray, ChainedInputStream, IOUtil, MemoryBufferInputStream}
@@ -53,5 +54,5 @@ object WarcLoader {
     }
   }
 
-  def load(hdfsPath: String): RDD[WarcRecord] = RddUtil.loadBinary(hdfsPath, decompress = false, close = false) { (_, in) => IteratorUtil.cleanup(load(in), in.close) }
+  def load(hdfsPath: String)(implicit accessContext: AccessContext = AccessContext.default): RDD[WarcRecord] = RddUtil.loadBinary(hdfsPath, decompress = false, close = false) { (_, in) => IteratorUtil.cleanup(load(in), in.close) }
 }

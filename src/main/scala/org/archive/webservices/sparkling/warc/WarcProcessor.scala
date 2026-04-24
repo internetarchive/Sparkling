@@ -4,6 +4,7 @@ import org.apache.commons.io.output.CountingOutputStream
 import org.apache.hadoop.fs.Path
 import org.apache.spark.rdd.RDD
 import org.archive.webservices.sparkling._
+import org.archive.webservices.sparkling.AccessContext
 import org.archive.webservices.sparkling.budget.BudgetRddManager
 import org.archive.webservices.sparkling.cdx.CdxRecord
 import org.archive.webservices.sparkling.compression.{Gzip, GzipBytes, Zstd}
@@ -194,9 +195,9 @@ object WarcProcessor {
     initPartitions(records).flatMap { record => Common.timeout(perMbTimeoutMillis) { open(record) { warc => action(warc) }.asInstanceOf[Option[R]] } }
   }
 
-  def run[R: ClassTag](path: String)(action: WarcRecord => TraversableOnce[R]): RDD[R] = runByFile(path) { (_, records) => records.flatMap(action) }
+  def run[R: ClassTag](path: String)(action: WarcRecord => TraversableOnce[R])(implicit accessContext: AccessContext = AccessContext.default): RDD[R] = runByFile(path) { (_, records) => records.flatMap(action) }
 
-  def runByFile[R: ClassTag](path: String)(action: (String, Iterator[WarcRecord]) => TraversableOnce[R]): RDD[R] = {
+  def runByFile[R: ClassTag](path: String)(action: (String, Iterator[WarcRecord]) => TraversableOnce[R])(implicit accessContext: AccessContext = AccessContext.default): RDD[R] = {
     RddUtil.loadBinary(path, decompress = false, close = false) { (file, in) =>
       Log.info("Processing " + file + "...")
       IteratorUtil.cleanup(
