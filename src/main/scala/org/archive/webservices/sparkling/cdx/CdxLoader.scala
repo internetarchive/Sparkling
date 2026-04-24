@@ -5,6 +5,7 @@ import java.io.InputStream
 import org.apache.hadoop.fs.Path
 import org.apache.spark.rdd.RDD
 import org.archive.webservices.sparkling._
+import org.archive.webservices.sparkling.AccessContext
 import org.archive.webservices.sparkling.att.AttachmentLoader
 import org.archive.webservices.sparkling.io.{DfsIO, IOUtil}
 import org.archive.webservices.sparkling.util.{Common, IteratorUtil, RddUtil, StringUtil}
@@ -15,9 +16,9 @@ import scala.reflect.ClassTag
 object CdxLoader {
   import org.archive.webservices.sparkling.Sparkling._
 
-  def load(path: String, sorted: Boolean = false): RDD[CdxRecord] = loadFiles(path, sorted).flatMap { case (_, records) => records.flatten }
+  def load(path: String, sorted: Boolean = false)(implicit accessContext: AccessContext = AccessContext.default): RDD[CdxRecord] = loadFiles(path, sorted).flatMap { case (_, records) => records.flatten }
 
-  def loadFiles(path: String, sorted: Boolean = false): RDD[(String, Iterator[Option[CdxRecord]])] = RddUtil.loadTextFiles(path, sorted = sorted).map { case (file, lines) =>
+  def loadFiles(path: String, sorted: Boolean = false)(implicit accessContext: AccessContext = AccessContext.default): RDD[(String, Iterator[Option[CdxRecord]])] = RddUtil.loadTextFiles(path, sorted = sorted).map { case (file, lines) =>
     (file, lines.map(CdxRecord.fromString))
   }
 
