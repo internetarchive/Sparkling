@@ -4,12 +4,18 @@ import java.io.InputStream
 import scala.annotation.tailrec
 import scala.util.Try
 
-class ChainedInputStream(in: Iterator[InputStream], nextOnError: Boolean = false, onClose: Option[() => Unit] = None) extends InputStream {
-  val buffered: BufferedIterator[LookAheadInputStream] = in.map(new LookAheadInputStream(_)).buffered
+class ChainedInputStream(
+    in: Iterator[InputStream],
+    nextOnError: Boolean = false,
+    onClose: Option[() => Unit] = None)
+    extends InputStream {
+  val buffered: BufferedIterator[LookAheadInputStream] =
+    in.map(new LookAheadInputStream(_)).buffered
 
   @tailrec private def next[A](eof: A, action: InputStream => A): A = if (buffered.hasNext) {
     val r = if (nextOnError) Try(action(buffered.head)).getOrElse(eof) else action(buffered.head)
-    val isEof = r == eof && (if (nextOnError) Try(buffered.head.eof).getOrElse(true) else buffered.head.eof)
+    val isEof =
+      r == eof && (if (nextOnError) Try(buffered.head.eof).getOrElse(true) else buffered.head.eof)
     if (isEof) {
       Try(buffered.head.close())
       buffered.next()
